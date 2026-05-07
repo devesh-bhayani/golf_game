@@ -1,0 +1,33 @@
+{
+	"name": "cards-server",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"engines": { "node": ">=18" },
+	"main": "dist/index.js",
+	"scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "node --loader ts-node/esm --watch src/index.ts",
+    "e2e": "node --loader ts-node/esm src/e2e.ts",
+    "e2e:golf": "node --loader ts-node/esm src/e2e-golf.ts",
+    "test:dealing": "node --loader ts-node/esm src/test-dealing.ts"
+	},
+	"dependencies": {
+		"cors": "^2.8.5",
+		"express": "^4.19.2",
+		"nanoid": "^5.0.7",
+		"socket.io": "^4.7.5"
+	},
+	"devDependencies": {
+		"@types/cors": "^2.8.17",
+		"@types/express": "^4.17.21",
+		"@types/node": "^20.12.12",
+		"ts-node": "^10.9.2",
+		"ts-node-dev": "^2.0.0",
+		"typescript": "^5.5.3",
+		"socket.io-client": "^4.7.5"
+	}
+}
+
+

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config *)",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\" -Force)",
+      "Bash(Select-Object Name, Attributes)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\\\\CARDS\\\\server\\\\src\" -Recurse -File)",
+      "Bash(Select-Object FullName)",
+      "Bash(npx tsc *)",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\")",
+      "PowerShell(findstr *)",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\\\\.claude\")",
+      "PowerShell(cmd /c \"dir /a /b /s C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\\\\CARDS\\\\GOLF-RULES\")",
+      "PowerShell(cmd /c \"dir /a /b C:\\\\Users\\\\admin\\\\.claude\\\\projects\\\\C--Users-admin-Desktop-GOLF\\\\memory\")",
+      "PowerShell(cmd /c \"type C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\\\\CARDS\\\\server\\\\package.json\")",
+      "PowerShell(cmd /c \"mkdir C:\\\\Users\\\\admin\\\\Desktop\\\\GOLF\\\\.scratch 2>nul\"; cmd /c \"echo done\")",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:3001/health)"
+    ]
+  }
+}
