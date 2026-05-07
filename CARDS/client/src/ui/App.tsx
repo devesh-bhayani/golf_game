@@ -655,7 +655,8 @@ export function App() {
   }
 
   useEffect(() => {
-    const s = io(serverUrl, { transports: ['websocket'] });
+    // Allow polling fallback so Render's proxy doesn't break reconnects
+    const s = io(serverUrl);
     setSocket(s);
 
     s.on('game:update', (snapshot: GameSnapshot) => {
@@ -669,13 +670,20 @@ export function App() {
     s.on('golf:hand', (slots: any) => setMyGolfSlots(slots));
     s.on('golf:pendingDraw', (card: CardT) => setPendingDraw(card));
 
-    // Attempt rejoin from localStorage
+    // Attempt rejoin from localStorage on every (re)connect
     s.on('connect', () => {
       const tok = localStorage.getItem('golf_playerToken');
       const savedCode = localStorage.getItem('golf_code');
       if (tok && savedCode) {
         s.emit('rejoinGame', { playerToken: tok }, (res: any) => {
-          if (res?.error) { clearSession(); return; }
+          if (res?.error) {
+            // Server lost the game (e.g. restarted) — drop back to landing
+            clearSession();
+            setGame(null); setPlayerId(null); setPlayerToken(null); setCode('');
+            setMyGolfSlots(null); setPendingDraw(null); setSelectedSlotId(null);
+            setView('landing');
+            return;
+          }
           setPlayerId(res.playerId);
           setPlayerToken(res.playerToken);
           setCode(res.code);
