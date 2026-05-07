@@ -10,8 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "lib": ["ES2020"],
-    "types": ["node"]
+    "lib": ["ES2020"]
   },
   "include": ["src"]
 }
