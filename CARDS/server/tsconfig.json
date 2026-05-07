@@ -12,7 +12,8 @@
     "resolveJsonModule": true,
     "lib": ["ES2020"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/e2e.ts", "src/e2e-golf.ts", "src/test-dealing.ts"]
 }
 
 
