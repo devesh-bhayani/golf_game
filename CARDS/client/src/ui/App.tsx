@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
 const globalStyles = `
@@ -26,10 +26,46 @@ const globalStyles = `
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
+  @keyframes flipReveal {
+    0%   { transform: scaleX(1); }
+    45%  { transform: scaleX(0); }
+    55%  { transform: scaleX(0); }
+    100% { transform: scaleX(1); }
+  }
+  @keyframes slotPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.55); }
+    50%       { box-shadow: 0 0 0 7px rgba(14, 165, 233, 0); }
+  }
+  @keyframes floatUpDrift {
+    0%   { transform: translateY(110vh) rotate(0deg);   opacity: 0; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { transform: translateY(-15vh) rotate(200deg); opacity: 0; }
+  }
+  @keyframes confettiFall {
+    0%   { transform: translateY(0) rotate(0deg) scaleX(1);    opacity: 1; }
+    60%  { opacity: 1; }
+    100% { transform: translateY(100vh) rotate(720deg) scaleX(0.5); opacity: 0; }
+  }
+  @keyframes deckShake {
+    0%,100% { transform: translateX(0); }
+    20%     { transform: translateX(-4px) rotate(-2deg); }
+    40%     { transform: translateX(4px)  rotate(2deg); }
+    60%     { transform: translateX(-3px) rotate(-1deg); }
+    80%     { transform: translateX(3px)  rotate(1deg); }
+  }
+  @keyframes viewEnter {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
   .card-hover:hover { animation: cardHover 0.3s ease-in-out forwards; }
-  .fade-in { animation: fadeIn 0.6s ease-out; }
-  .slide-in { animation: slideIn 0.4s ease-out; }
-  .glow { animation: glow 2s ease-in-out infinite; }
+  .fade-in   { animation: fadeIn   0.6s ease-out; }
+  .slide-in  { animation: slideIn  0.4s ease-out; }
+  .view-enter { animation: viewEnter 0.35s ease-out; }
+  .glow      { animation: glow     2s ease-in-out infinite; }
+  .slot-pulse { animation: slotPulse 1.4s ease-in-out infinite; }
+  .slot-flip  { animation: flipReveal 0.5s ease-in-out; }
+  .deck-shake { animation: deckShake 0.45s ease-in-out; }
 `;
 
 if (typeof document !== 'undefined') {
@@ -134,12 +170,15 @@ const Btn = ({
   style?: React.CSSProperties;
   [k: string]: any;
 }) => {
+  const [hovered, setHovered] = useState(false);
   const base: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     fontFamily: theme.typography.fontFamily, fontWeight: theme.typography.fontWeight.medium,
     borderRadius: theme.borderRadius.lg, border: 'none', outline: 'none',
     cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
-    transition: 'all 0.2s ease-in-out', pointerEvents: disabled ? 'none' : 'auto',
+    transition: 'all 0.18s ease-out', pointerEvents: disabled ? 'none' : 'auto',
+    transform: hovered && !disabled ? 'translateY(-2px) scale(1.03)' : 'translateY(0) scale(1)',
+    filter: hovered && !disabled ? 'brightness(1.15)' : 'none',
   };
   const sizes = {
     sm: { padding: `${theme.spacing.sm} ${theme.spacing.md}`, fontSize: theme.typography.fontSize.sm },
@@ -147,16 +186,22 @@ const Btn = ({
     lg: { padding: `${theme.spacing.lg} ${theme.spacing['2xl']}`, fontSize: theme.typography.fontSize.lg },
   };
   const variants: Record<string, React.CSSProperties> = {
-    primary: { background: `linear-gradient(135deg, ${theme.colors.primary[500]}, ${theme.colors.primary[600]})`, color: 'white', boxShadow: theme.shadows.md },
-    secondary: { background: `linear-gradient(135deg, ${theme.colors.secondary[500]}, ${theme.colors.secondary[600]})`, color: 'white' },
+    primary: { background: `linear-gradient(135deg, ${theme.colors.primary[500]}, ${theme.colors.primary[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(14,165,233,0.45)' : theme.shadows.md },
+    secondary: { background: `linear-gradient(135deg, ${theme.colors.secondary[500]}, ${theme.colors.secondary[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(139,92,246,0.45)' : theme.shadows.md },
     outline: { background: 'transparent', color: theme.colors.dark[100], border: `1px solid ${theme.colors.dark[600]}` },
     ghost: { background: 'transparent', color: theme.colors.dark[300] },
-    success: { background: theme.colors.success[500], color: 'white' },
-    warning: { background: theme.colors.warning[500], color: 'white' },
-    error: { background: theme.colors.error[500], color: 'white' },
+    success: { background: `linear-gradient(135deg, ${theme.colors.success[500]}, ${theme.colors.success[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(16,185,129,0.45)' : theme.shadows.md },
+    warning: { background: `linear-gradient(135deg, ${theme.colors.warning[500]}, ${theme.colors.warning[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(245,158,11,0.45)' : theme.shadows.md },
+    error: { background: `linear-gradient(135deg, ${theme.colors.error[500]}, ${theme.colors.error[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(239,68,68,0.45)' : theme.shadows.md },
   };
   return (
-    <button style={{ ...base, ...sizes[size], ...variants[variant], ...extraStyle }} onClick={onClick} disabled={disabled} {...props}>
+    <button
+      style={{ ...base, ...sizes[size], ...variants[variant], ...extraStyle }}
+      onClick={onClick} disabled={disabled}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      {...props}
+    >
       {children}
     </button>
   );
@@ -233,15 +278,114 @@ function CardBack({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
 function SlotView({ slot, selectable, selected, onSelect, cardSize = 'md' }: {
   slot: GolfSlotT; selectable: boolean; selected: boolean; onSelect: () => void; cardSize?: 'sm' | 'md';
 }) {
+  const prevLocked = useRef(slot.locked);
+  const [flipping, setFlipping] = useState(false);
+  const [showCard, setShowCard] = useState(slot.locked && !!slot.card);
+
+  useEffect(() => {
+    if (!prevLocked.current && slot.locked && slot.card) {
+      setFlipping(true);
+      const mid = setTimeout(() => setShowCard(true), 250);
+      const end = setTimeout(() => setFlipping(false), 500);
+      prevLocked.current = true;
+      return () => { clearTimeout(mid); clearTimeout(end); };
+    }
+    prevLocked.current = slot.locked;
+    if (slot.locked && slot.card) setShowCard(true);
+    if (!slot.locked) setShowCard(false);
+  }, [slot.locked, slot.card]);
+
   const borderColor = selected ? theme.colors.primary[500] : slot.locked ? theme.colors.success[500] : theme.colors.dark[600];
+  const classes = [
+    flipping ? 'slot-flip' : '',
+    selectable ? 'slot-pulse' : '',
+  ].filter(Boolean).join(' ');
+
   return (
     <div
+      className={classes}
       onClick={() => selectable && onSelect()}
-      style={{ cursor: selectable ? 'pointer' : 'default', border: `2px solid ${borderColor}`, borderRadius: theme.borderRadius.lg, padding: 2, transition: 'border-color 0.2s' }}
+      style={{
+        cursor: selectable ? 'pointer' : 'default',
+        border: `2px solid ${borderColor}`,
+        borderRadius: theme.borderRadius.lg,
+        padding: 2,
+        transition: 'border-color 0.25s',
+      }}
     >
-      {slot.card ? <CardView card={slot.card} size={cardSize} /> : <CardBack size={cardSize} />}
+      {showCard && slot.card ? <CardView card={slot.card} size={cardSize} /> : <CardBack size={cardSize} />}
     </div>
   );
+}
+
+// ---- Ambient / effects ----
+
+function FloatingCards() {
+  const items = useMemo(() => Array.from({ length: 14 }, (_, i) => ({
+    id: i,
+    suit: ['♠', '♥', '♦', '♣'][i % 4],
+    x: 5 + (i * 7) % 90,
+    size: 24 + (i * 13) % 36,
+    duration: 18 + (i * 3.7) % 18,
+    delay: -(i * 4.1) % 30,
+    isRed: i % 4 >= 2,
+  })), []);
+  return (
+    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0, overflow: 'hidden' }}>
+      {items.map((item) => (
+        <div key={item.id} style={{
+          position: 'absolute', left: `${item.x}%`, bottom: '-10%',
+          fontSize: item.size,
+          color: item.isRed ? 'rgba(220,38,38,0.13)' : 'rgba(255,255,255,0.07)',
+          animation: `floatUpDrift ${item.duration}s ${item.delay}s linear infinite`,
+          userSelect: 'none',
+        }}>{item.suit}</div>
+      ))}
+    </div>
+  );
+}
+
+function Confetti() {
+  const pieces = useMemo(() => Array.from({ length: 65 }, (_, i) => ({
+    id: i,
+    x: (i * 1.57) % 100,
+    delay: (i * 0.047) % 2,
+    duration: 2.5 + (i * 0.07) % 2,
+    color: ['#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#06b6d4','#f97316'][i % 7],
+    size: 7 + (i * 0.3) % 8,
+    circle: i % 3 !== 0,
+    drift: ((i % 7) - 3) * 40,
+  })), []);
+  return (
+    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 400, overflow: 'hidden' }}>
+      {pieces.map((p) => (
+        <div key={p.id} style={{
+          position: 'absolute', left: `${p.x}%`, top: -16,
+          width: p.size, height: p.circle ? p.size : p.size * 1.6,
+          background: p.color, borderRadius: p.circle ? '50%' : 3,
+          animation: `confettiFall ${p.duration}s ${p.delay}s ease-in forwards`,
+        }} />
+      ))}
+    </div>
+  );
+}
+
+function CountUp({ target, duration = 900 }: { target: number; duration?: number }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let start: number | null = null;
+    const from = 0;
+    const raf = (ts: number) => {
+      if (!start) start = ts;
+      const p = Math.min((ts - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setVal(Math.round(from + (target - from) * eased));
+      if (p < 1) requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
+    return () => setVal(target);
+  }, [target, duration]);
+  return <>{val}</>;
 }
 
 // ---- Round score modal ----
@@ -266,10 +410,12 @@ function RoundScoreModal({
   const winners = isEnd ? game.leaderboard?.filter((e) => e.rank === 1) : [];
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+    <>
+      {isEnd && <Confetti />}
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
       <Panel style={{ padding: theme.spacing['3xl'], maxWidth: 640, width: '95%', maxHeight: '90vh', overflowY: 'auto' }} className="fade-in">
         <h2 style={{ margin: '0 0 1rem', color: theme.colors.dark[100], fontSize: theme.typography.fontSize['2xl'] }}>
-          {isEnd ? 'Game Over!' : `Round ${game.currentRound} Complete`}
+          {isEnd ? '🏆 Game Over!' : `Round ${game.currentRound} Complete`}
         </h2>
 
         {isEnd && winners && winners.length > 0 && (
@@ -307,7 +453,7 @@ function RoundScoreModal({
                     {Array.from({ length: roundCount }, (_, i) => (
                       <td key={i} style={{ textAlign: 'center', padding: '6px 8px' }}>{rs?.scores[i] ?? '–'}</td>
                     ))}
-                    <td style={{ textAlign: 'center', padding: '6px 8px', fontWeight: 700, color: theme.colors.dark[100] }}>{total}</td>
+                    <td style={{ textAlign: 'center', padding: '6px 8px', fontWeight: 700, color: theme.colors.dark[100] }}><CountUp target={total} /></td>
                   </tr>
                 );
               })}
@@ -374,6 +520,7 @@ function RoundScoreModal({
         </div>
       </Panel>
     </div>
+    </>
   );
 }
 
@@ -403,6 +550,8 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
   const cardSize: 'sm' | 'md' = windowWidth < 480 ? 'sm' : 'md';
   const cardGap = cardSize === 'sm' ? 6 : 8;
 
+  const [deckShaking, setDeckShaking] = useState(false);
+
   const isMyTurn = game.golf?.turn === playerId;
   const perRow = Math.floor((game.config.cardsPerPlayer || 4) / 2);
   const peekActive = game.golf?.peekPhaseActive !== false;
@@ -420,7 +569,7 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
           <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code: <strong style={{ color: theme.colors.dark[200] }}>{game.code}</strong></span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Deck: {game.extraDeckCount}</span>
+          <span className={deckShaking ? 'deck-shake' : ''} style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm, display: 'inline-block' }}>🂠 {game.extraDeckCount}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard:</span>
             {game.discardTop ? <CardView card={game.discardTop} size="sm" /> : <span style={{ color: theme.colors.dark[500] }}>—</span>}
@@ -576,10 +725,14 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
                   Swap with discard
                 </Btn>
                 <Btn variant="outline"
-                  onClick={() => emit('golf:draw', {}, (r: any) => {
-                    if (r?.error) return alert(r.error);
-                    setPendingDraw(r.card);
-                  })}>
+                  onClick={() => {
+                    setDeckShaking(true);
+                    setTimeout(() => setDeckShaking(false), 500);
+                    emit('golf:draw', {}, (r: any) => {
+                      if (r?.error) return alert(r.error);
+                      setPendingDraw(r.card);
+                    });
+                  }}>
                   Draw from deck
                 </Btn>
               </>
@@ -776,15 +929,21 @@ export function App() {
   return (
     <div style={{
       minHeight: '100vh',
-      background: `linear-gradient(135deg,${theme.colors.dark[950]} 0%,${theme.colors.dark[900]} 50%,${theme.colors.dark[800]} 100%)`,
+      background: `
+        repeating-linear-gradient(45deg,  rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 7px),
+        repeating-linear-gradient(-45deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 7px),
+        radial-gradient(ellipse at 30% 30%, #1e5c2e 0%, #0f3d1f 50%, #071a0e 100%)
+      `,
       fontFamily: theme.typography.fontFamily, color: theme.colors.dark[100],
       padding: isMobile ? theme.spacing.lg : theme.spacing['3xl'], position: 'relative',
     }}>
-      <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: `radial-gradient(circle at 20% 80%,${theme.colors.primary[900]}22 0%,transparent 50%),radial-gradient(circle at 80% 20%,${theme.colors.secondary[900]}22 0%,transparent 50%)`, animation: 'float 20s ease-in-out infinite', zIndex: -1, pointerEvents: 'none' }} />
+      {/* Ambient vignette */}
+      <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%)', zIndex: 0, pointerEvents: 'none' }} />
+      <FloatingCards />
 
       {/* --- Landing --- */}
       {view === 'landing' && (
-        <div style={{ maxWidth: 400, margin: '0 auto', paddingTop: theme.spacing['5xl'] }}>
+        <div className="view-enter" style={{ maxWidth: 400, margin: '0 auto', paddingTop: theme.spacing['5xl'], position: 'relative', zIndex: 1 }}>
           <div style={{ textAlign: 'center', marginBottom: theme.spacing['5xl'] }}>
             <h1 style={{ fontSize: theme.typography.fontSize['4xl'], fontWeight: theme.typography.fontWeight.bold, background: `linear-gradient(135deg,${theme.colors.primary[400]},${theme.colors.secondary[400]})`, backgroundClip: 'text', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: theme.spacing.md, letterSpacing: '-0.02em' }}>Golf</h1>
             <p style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.lg, fontWeight: theme.typography.fontWeight.bold, letterSpacing: '0.06em' }}>MULTIPLAYER CARD GAME</p>
@@ -807,7 +966,7 @@ export function App() {
 
       {/* --- Create --- */}
       {view === 'create' && (
-        <div style={{ maxWidth: 500, margin: '0 auto', paddingTop: theme.spacing['3xl'] }}>
+        <div className="view-enter" style={{ maxWidth: 500, margin: '0 auto', paddingTop: theme.spacing['3xl'], position: 'relative', zIndex: 1 }}>
           <div style={{ marginBottom: theme.spacing['3xl'], textAlign: 'center' }}>
             <h2 style={{ fontSize: theme.typography.fontSize['3xl'], fontWeight: theme.typography.fontWeight.bold, color: theme.colors.dark[100], marginBottom: theme.spacing.md }}>Create Game</h2>
           </div>
@@ -847,7 +1006,7 @@ export function App() {
 
       {/* --- Join --- */}
       {view === 'join' && (
-        <div style={{ maxWidth: 400, margin: '0 auto', paddingTop: theme.spacing['3xl'] }}>
+        <div className="view-enter" style={{ maxWidth: 400, margin: '0 auto', paddingTop: theme.spacing['3xl'], position: 'relative', zIndex: 1 }}>
           <div style={{ marginBottom: theme.spacing['3xl'], textAlign: 'center' }}>
             <h2 style={{ fontSize: theme.typography.fontSize['3xl'], fontWeight: theme.typography.fontWeight.bold, color: theme.colors.dark[100], marginBottom: theme.spacing.md }}>Join Game</h2>
           </div>
@@ -869,7 +1028,7 @@ export function App() {
 
       {/* --- Lobby --- */}
       {view === 'lobby' && game && (
-        <div style={{ maxWidth: 480, margin: '0 auto', display: 'grid', gap: 16 }}>
+        <div className="view-enter" style={{ maxWidth: 480, margin: '0 auto', display: 'grid', gap: 16, position: 'relative', zIndex: 1 }}>
           <h2 style={{ margin: 0, color: theme.colors.dark[100] }}>Lobby</h2>
           <Panel style={{ padding: theme.spacing['2xl'] }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: theme.spacing.lg }}>
@@ -933,11 +1092,13 @@ export function App() {
 
       {/* --- Golf table --- */}
       {view === 'table' && game && isGolf && (
+        <div className="view-enter" style={{ position: 'relative', zIndex: 1 }}>
         <GolfTable
           game={game} playerId={playerId} myGolfSlots={myGolfSlots} socket={socket}
           pendingDraw={pendingDraw} setPendingDraw={setPendingDraw}
           selectedSlotId={selectedSlotId} setSelectedSlotId={setSelectedSlotId}
         />
+        </div>
       )}
 
       {/* --- Between-rounds modal --- */}
