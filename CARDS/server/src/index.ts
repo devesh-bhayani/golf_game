@@ -16,20 +16,21 @@ type Card = {
 };
 
 type Player = {
-  playerId: string;        // stable across reconnects
-  playerToken: string;     // secret, returned to client once
-  currentSocketId: string; // updated on (re)connect
+  playerId: string;
+  playerToken: string;
+  currentSocketId: string;
   displayName: string;
   connected: boolean;
-  disconnectedAt?: number; // ms epoch when disconnect started
+  disconnectedAt?: number;
 };
 
-type GameMode = 'classic' | 'golf';
+type GameMode = 'classic' | 'golf' | 'cabo';
 
 type GamePhase =
   | 'waiting'
   | 'peek'
   | 'play'
+  | 'cabo-called'
   | 'between-rounds'
   | 'ended'
   | 'rematch-pending';
@@ -50,6 +51,11 @@ type GolfSlot = {
   peekOnly?: boolean;
 };
 
+type CaboSlot = {
+  slotId: string;
+  card: Card;
+};
+
 type GameState = {
   gameId: string;
   code: string;
@@ -58,7 +64,7 @@ type GameState = {
   phase: GamePhase;
   config: GameConfig;
   players: Map<string, Player>;
-  hands: Map<string, Card[]>; // classic mode
+  hands: Map<string, Card[]>;
   centerPile: Card[];
   extraDeck: Card[];
   // golf
@@ -76,6 +82,20 @@ type GameState = {
   betweenRoundAckByPlayer: Set<string>;
   rematchAckByPlayer: Set<string>;
   pendingDrawByPlayer: Map<string, Card>;
+  // cabo
+  caboHands?: Map<string, CaboSlot[]>;
+  caboTurnOrder?: string[];
+  caboCurrentTurnIndex?: number;
+  caboPeekAckByPlayer?: Set<string>;
+  caboPeekPhaseActive?: boolean;
+  caboCallerId?: string;
+  caboFinalTurnsLeft?: number;
+  caboRoundScores?: Map<string, number[]>;
+  caboCumulativeScores?: Map<string, number>;
+  caboPendingDraw?: Map<string, Card>;
+  caboBlackKingPending?: Map<string, { targetPlayerId: string; targetSlotId: string }>;
+  caboSnapGapPending?: Map<string, string>; // snapperId -> opponentId
+  caboLeaderboard?: Array<{ playerId: string; displayName: string; score: number; rank: number }>;
 };
 
 const nano4 = customAlphabet('0123456789', 4);
@@ -84,7 +104,6 @@ const nanoPlayerId = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 12);
 
 const codeToGameId = new Map<string, string>();
 const games = new Map<string, GameState>();
-// token -> { gameId, playerId } for rejoin lookup
 const tokenIndex = new Map<string, { gameId: string; playerId: string }>();
 const globalLeaderboard: Array<{ playerId: string; displayName: string; totalScore: number; gamesPlayed: number }> = [];
 
@@ -148,7 +167,6 @@ function dealGolfRound(state: GameState): void {
 
   state.golfHands = new Map<string, GolfSlot[]>();
   state.turnOrder = playerIds;
-  // Right of dealer plays first; dealer = host = seat 0; so start at seat 1.
   state.currentTurnIndex = 1 % numPlayers;
   state.peekAckByPlayer = new Set<string>();
   state.peekPhaseActive = true;
@@ -175,7 +193,6 @@ function dealGolfRound(state: GameState): void {
   const top = state.extraDeck.pop();
   if (top) state.discardPile.push(top);
 
-  // initial peek: bottom row
   for (const pid of playerIds) {
     const slots = state.golfHands.get(pid)!;
     const perRow = cardsPerPlayer / 2;
@@ -217,7 +234,6 @@ function rankPointValue(rank: Rank): number {
 function calculateGolfScore(slots: GolfSlot[]): number {
   const cards = slots.map((s) => s.card);
 
-  // Kings handled separately with bonus tiers
   const kingCount = cards.filter((c) => c.rank === 'K').length;
   let kingScore = 0;
   if (kingCount === 1) kingScore = 0;
@@ -234,22 +250,259 @@ function calculateGolfScore(slots: GolfSlot[]): number {
     const n = counts[rank];
     const v = rankPointValue(rank as Rank);
     if (n >= 4) {
-      // Four of a kind = -20 bonus; if more (multi-deck), extras score normally
       nonKingScore += -20 + (n - 4) * v;
     } else if (n === 3) {
-      // Three = 0
       nonKingScore += 0;
     } else if (n === 2) {
-      // Pair = 0
       nonKingScore += 0;
     } else {
-      // single
       nonKingScore += v;
     }
   }
 
   return kingScore + nonKingScore;
 }
+
+// ---------- Cabo helpers ----------
+
+function caboCardValue(card: Card): number {
+  if (card.rank === 'A') return 0;
+  if (card.rank === 'K') return card.color === 'red' ? -1 : 10;
+  if (['J', 'Q'].includes(card.rank)) return 10;
+  return parseInt(card.rank);
+}
+
+function getCaboSpecialAction(card: Card): string | null {
+  if (['7', '8'].includes(card.rank)) return 'peek-own';
+  if (['9', '10'].includes(card.rank)) return 'spy';
+  if (['J', 'Q'].includes(card.rank)) return 'blind-swap';
+  if (card.rank === 'K' && card.color === 'black') return 'black-king-see';
+  return null;
+}
+
+function dealCaboRound(state: GameState): void {
+  const playerIds = Array.from(state.players.keys());
+  const numPlayers = playerIds.length;
+  const CARDS_PER_PLAYER = 4;
+
+  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+
+  state.caboHands = new Map<string, CaboSlot[]>();
+  state.caboTurnOrder = playerIds;
+  state.caboCurrentTurnIndex = 1 % numPlayers;
+  state.caboPeekAckByPlayer = new Set<string>();
+  state.caboPeekPhaseActive = true;
+  state.phase = 'peek';
+  state.caboPendingDraw = new Map<string, Card>();
+  state.caboBlackKingPending = new Map();
+  state.caboSnapGapPending = new Map();
+  state.caboCallerId = undefined;
+  state.caboFinalTurnsLeft = undefined;
+
+  let dealIndex = 0;
+  for (const pid of playerIds) {
+    const slots: CaboSlot[] = [];
+    for (let s = 0; s < CARDS_PER_PLAYER; s++) {
+      const card = fullDeck[dealIndex++];
+      slots.push({ slotId: `${pid}:r${state.currentRound}:s${s}`, card });
+    }
+    state.caboHands.set(pid, slots);
+  }
+
+  state.extraDeck = fullDeck.slice(dealIndex);
+  state.discardPile = [];
+  const top = state.extraDeck.pop();
+  if (top) state.discardPile.push(top);
+}
+
+function startCabo(state: GameState): void {
+  state.config.cardsPerPlayer = 4;
+  state.currentRound = 1;
+  state.targetRounds = 0;
+  state.caboRoundScores = new Map(Array.from(state.players.keys()).map((pid) => [pid, []]));
+  state.caboCumulativeScores = new Map(Array.from(state.players.keys()).map((pid) => [pid, 0]));
+  state.betweenRoundAckByPlayer = new Set();
+  state.rematchAckByPlayer = new Set();
+  dealCaboRound(state);
+}
+
+function calculateCaboHandScore(slots: CaboSlot[]): number {
+  return slots.reduce((sum, s) => sum + caboCardValue(s.card), 0);
+}
+
+function caboEnsureDrawPile(state: GameState): void {
+  if (state.extraDeck.length === 0) reshuffleDrawPile(state);
+}
+
+function caboEndTurn(io: Server, state: GameState): void {
+  if (!state.caboTurnOrder) return;
+  const numPlayers = state.caboTurnOrder.length;
+
+  if (state.phase === 'cabo-called') {
+    let remaining = (state.caboFinalTurnsLeft ?? 0) - 1;
+
+    if (remaining <= 0) {
+      state.caboFinalTurnsLeft = 0;
+      finalizeCaboRound(io, state);
+      return;
+    }
+
+    let idx = state.caboCurrentTurnIndex ?? 0;
+    for (let i = 0; i < numPlayers; i++) {
+      idx = (idx + 1) % numPlayers;
+      const pid = state.caboTurnOrder[idx];
+      if (pid === state.caboCallerId) continue;
+      const player = state.players.get(pid);
+      if (!player?.connected) {
+        remaining--;
+        if (remaining <= 0) {
+          state.caboCurrentTurnIndex = idx;
+          state.caboFinalTurnsLeft = 0;
+          finalizeCaboRound(io, state);
+          return;
+        }
+        continue;
+      }
+      state.caboCurrentTurnIndex = idx;
+      state.caboFinalTurnsLeft = remaining;
+      return;
+    }
+    state.caboFinalTurnsLeft = 0;
+    finalizeCaboRound(io, state);
+  } else {
+    state.caboCurrentTurnIndex = ((state.caboCurrentTurnIndex ?? 0) + 1) % numPlayers;
+  }
+}
+
+function finalizeCaboRound(io: Server, state: GameState): void {
+  if (!state.caboHands || !state.caboRoundScores || !state.caboCumulativeScores) return;
+
+  const rawScores = new Map<string, number>();
+  for (const [pid, slots] of state.caboHands) {
+    rawScores.set(pid, calculateCaboHandScore(slots));
+  }
+
+  const minScore = Math.min(...Array.from(rawScores.values()));
+  const lowestPlayers = Array.from(rawScores.entries())
+    .filter(([, s]) => s === minScore)
+    .map(([pid]) => pid);
+
+  const callerId = state.caboCallerId;
+
+  for (const [pid, raw] of rawScores) {
+    let roundScore: number;
+    if (lowestPlayers.includes(pid)) {
+      roundScore = 0;
+    } else {
+      roundScore = raw + (pid === callerId ? 5 : 0);
+    }
+    const arr = state.caboRoundScores.get(pid) ?? [];
+    arr.push(roundScore);
+    state.caboRoundScores.set(pid, arr);
+    const prev = state.caboCumulativeScores.get(pid) ?? 0;
+    state.caboCumulativeScores.set(pid, prev + roundScore);
+  }
+
+  const gameOver = Array.from(state.caboCumulativeScores.values()).some((s) => s > 100);
+
+  if (gameOver) {
+    finalizeCaboGame(state);
+  } else {
+    state.phase = 'between-rounds';
+    state.betweenRoundAckByPlayer = new Set();
+    autoAckDisconnected(state, state.betweenRoundAckByPlayer);
+    maybeCaboAdvanceRound(io, state);
+  }
+}
+
+function finalizeCaboGame(state: GameState): void {
+  if (!state.caboCumulativeScores) return;
+  state.status = 'ended';
+  state.phase = 'rematch-pending';
+
+  const gameResults = Array.from(state.caboCumulativeScores.entries())
+    .map(([pid, score]) => ({
+      playerId: pid,
+      displayName: state.players.get(pid)?.displayName || 'Unknown',
+      score,
+    }))
+    .sort((a, b) => a.score - b.score);
+
+  state.caboLeaderboard = [];
+  let prevScore: number | null = null;
+  let prevRank = 0;
+  gameResults.forEach((r, idx) => {
+    let rank: number;
+    if (prevScore !== null && r.score === prevScore) {
+      rank = prevRank;
+    } else {
+      rank = idx + 1;
+      prevRank = rank;
+      prevScore = r.score;
+    }
+    state.caboLeaderboard!.push({ ...r, rank });
+  });
+
+  for (const r of gameResults) {
+    const existing = globalLeaderboard.find((p) => p.playerId === r.playerId);
+    if (existing) {
+      existing.totalScore += r.score;
+      existing.gamesPlayed += 1;
+    } else {
+      globalLeaderboard.push({ playerId: r.playerId, displayName: r.displayName, totalScore: r.score, gamesPlayed: 1 });
+    }
+  }
+  globalLeaderboard.sort((a, b) => a.totalScore - b.totalScore);
+
+  state.rematchAckByPlayer = new Set();
+  autoAckDisconnected(state, state.rematchAckByPlayer);
+}
+
+function maybeCaboAdvanceRound(io: Server, state: GameState): void {
+  if (state.phase !== 'between-rounds') return;
+  const required = Array.from(state.players.values()).filter((p) => p.connected).map((p) => p.playerId);
+  if (required.length === 0) return;
+  if (!required.every((pid) => state.betweenRoundAckByPlayer.has(pid))) return;
+
+  // Winner of last round goes first
+  let winnerIndex = 1 % (state.caboTurnOrder?.length ?? 1);
+  if (state.caboRoundScores && state.caboTurnOrder) {
+    const lastRoundIdx = state.currentRound - 1;
+    let minScore = Infinity;
+    let winnerId: string | undefined;
+    for (const [pid, scores] of state.caboRoundScores) {
+      const s = scores[lastRoundIdx];
+      if (s !== undefined && s < minScore) { minScore = s; winnerId = pid; }
+    }
+    if (winnerId) {
+      const idx = state.caboTurnOrder.indexOf(winnerId);
+      if (idx !== -1) winnerIndex = idx;
+    }
+  }
+
+  state.currentRound += 1;
+  dealCaboRound(state);
+  if (state.caboTurnOrder) {
+    state.caboCurrentTurnIndex = winnerIndex % state.caboTurnOrder.length;
+  }
+
+  for (const pid of state.players.keys()) {
+    emitToPlayer(io, state, pid, 'cabo:hand', state.caboHands!.get(pid) ?? []);
+  }
+}
+
+function resetCaboForRematch(state: GameState): void {
+  state.status = 'active';
+  state.caboLeaderboard = undefined;
+  state.currentRound = 1;
+  state.caboRoundScores = new Map(Array.from(state.players.keys()).map((pid) => [pid, []]));
+  state.caboCumulativeScores = new Map(Array.from(state.players.keys()).map((pid) => [pid, 0]));
+  state.betweenRoundAckByPlayer = new Set();
+  state.rematchAckByPlayer = new Set();
+  dealCaboRound(state);
+}
+
+// ---------- shared helpers ----------
 
 function emitToPlayer(io: Server, state: GameState, playerId: string, event: string, payload: any) {
   const p = state.players.get(playerId);
@@ -277,7 +530,6 @@ function checkRoundEnd(io: Server, state: GameState) {
   if (!state.golfHands) return;
   const allLocked = Array.from(state.golfHands.values()).every((slots) => slots.every((s) => s.locked));
   if (!allLocked) return;
-  // Score this round
   for (const [pid, slots] of state.golfHands) {
     const score = calculateGolfScore(slots);
     const arr = state.roundScores.get(pid) ?? [];
@@ -297,11 +549,10 @@ function checkRoundEnd(io: Server, state: GameState) {
 function maybeAdvanceRound(io: Server, state: GameState) {
   if (state.phase !== 'between-rounds') return;
   const required = Array.from(state.players.values()).filter((p) => p.connected).map((p) => p.playerId);
-  if (required.length === 0) return; // edge: nobody connected; wait
+  if (required.length === 0) return;
   if (!required.every((pid) => state.betweenRoundAckByPlayer.has(pid))) return;
   state.currentRound += 1;
   dealGolfRound(state);
-  // Send each player their hand including peek
   for (const pid of state.players.keys()) {
     emitToPlayer(io, state, pid, 'golf:hand', state.golfHands!.get(pid));
   }
@@ -325,7 +576,6 @@ function finalizeGame(state: GameState) {
     }))
     .sort((a, b) => a.score - b.score);
 
-  // Competition ranking: 1, 1, 3, 4 ... (co-winners share rank 1)
   state.leaderboard = [];
   let prevScore: number | null = null;
   let prevRank = 0;
@@ -341,24 +591,17 @@ function finalizeGame(state: GameState) {
     state.leaderboard!.push({ ...r, rank });
   });
 
-  // Update global leaderboard cumulatively
   for (const r of gameResults) {
     const existing = globalLeaderboard.find((p) => p.playerId === r.playerId);
     if (existing) {
       existing.totalScore += r.score;
       existing.gamesPlayed += 1;
     } else {
-      globalLeaderboard.push({
-        playerId: r.playerId,
-        displayName: r.displayName,
-        totalScore: r.score,
-        gamesPlayed: 1,
-      });
+      globalLeaderboard.push({ playerId: r.playerId, displayName: r.displayName, totalScore: r.score, gamesPlayed: 1 });
     }
   }
   globalLeaderboard.sort((a, b) => a.totalScore - b.totalScore);
 
-  // Reset rematch ack set for the upcoming rematch decision
   state.rematchAckByPlayer = new Set();
   autoAckDisconnected(state, state.rematchAckByPlayer);
 }
@@ -433,6 +676,45 @@ function publicGameSnapshot(state: GameState, _viewingPlayerId?: string) {
   snapshot.rematchAcks = Array.from(state.rematchAckByPlayer);
 
   if (state.leaderboard) snapshot.leaderboard = state.leaderboard;
+
+  // Cabo snapshot
+  if (state.caboHands) {
+    const pendingDrawPlayers: string[] = [];
+    if (state.caboPendingDraw) {
+      for (const [pid] of state.caboPendingDraw) pendingDrawPlayers.push(pid);
+    }
+    const blackKingPlayers: string[] = [];
+    if (state.caboBlackKingPending) {
+      for (const [pid] of state.caboBlackKingPending) blackKingPlayers.push(pid);
+    }
+    snapshot.cabo = {
+      hands: Array.from(state.caboHands.entries()).map(([pid, slots]) => ({
+        playerId: pid,
+        slots: slots.map((s) => ({ slotId: s.slotId })),
+      })),
+      turn: state.caboTurnOrder ? state.caboTurnOrder[state.caboCurrentTurnIndex ?? 0] : null,
+      round: state.currentRound,
+      peekPhaseActive: state.caboPeekPhaseActive ?? false,
+      peekAcks: state.caboPeekAckByPlayer ? Array.from(state.caboPeekAckByPlayer) : [],
+      caboCallerId: state.caboCallerId ?? null,
+      caboFinalTurnsLeft: state.caboFinalTurnsLeft ?? 0,
+      pendingDrawPlayers,
+      blackKingPlayers,
+    };
+  }
+
+  if (state.caboRoundScores && state.caboRoundScores.size > 0) {
+    snapshot.caboRoundScores = Array.from(state.caboRoundScores.entries()).map(([pid, scores]) => ({
+      playerId: pid,
+      scores,
+    }));
+  }
+
+  if (state.caboCumulativeScores) {
+    snapshot.caboCumulativeScores = Object.fromEntries(state.caboCumulativeScores);
+  }
+
+  if (state.caboLeaderboard) snapshot.caboLeaderboard = state.caboLeaderboard;
 
   return snapshot;
 }
@@ -556,6 +838,10 @@ io.on('connection', (socket) => {
       io.to(socket.id).emit('golf:hand', state.golfHands.get(player.playerId));
       const pendingCard = state.pendingDrawByPlayer.get(player.playerId);
       if (pendingCard) io.to(socket.id).emit('golf:pendingDraw', pendingCard);
+    } else if (state.config.gameMode === 'cabo' && state.caboHands) {
+      io.to(socket.id).emit('cabo:hand', state.caboHands.get(player.playerId) ?? []);
+      const pendingCard = state.caboPendingDraw?.get(player.playerId);
+      if (pendingCard) io.to(socket.id).emit('cabo:pendingDraw', pendingCard);
     } else if (state.hands.has(player.playerId)) {
       io.to(socket.id).emit('hand:update', state.hands.get(player.playerId));
     }
@@ -575,24 +861,29 @@ io.on('connection', (socket) => {
     if (state.players.size < 2) return ack({ error: 'Need at least 2 players' });
     state.status = 'active';
     state.centerPile = [];
+
     if (state.config.gameMode === 'golf') {
       if (![4, 6, 8].includes(state.config.cardsPerPlayer)) state.config.cardsPerPlayer = 4;
       startGolf(state);
-    } else {
-      dealCards(state);
-      state.phase = 'play';
-    }
-
-    broadcastSnapshot(io, state);
-    if (state.config.gameMode === 'golf') {
+      broadcastSnapshot(io, state);
       for (const pid of state.players.keys()) {
         emitToPlayer(io, state, pid, 'golf:hand', state.golfHands!.get(pid));
       }
+    } else if (state.config.gameMode === 'cabo') {
+      startCabo(state);
+      broadcastSnapshot(io, state);
+      for (const pid of state.players.keys()) {
+        emitToPlayer(io, state, pid, 'cabo:hand', state.caboHands!.get(pid) ?? []);
+      }
     } else {
+      dealCards(state);
+      state.phase = 'play';
+      broadcastSnapshot(io, state);
       for (const pid of state.players.keys()) {
         emitToPlayer(io, state, pid, 'hand:update', state.hands.get(pid));
       }
     }
+
     ack({ ok: true });
   });
 
@@ -612,7 +903,6 @@ io.on('connection', (socket) => {
     }
     if (!state.peekAckByPlayer) state.peekAckByPlayer = new Set();
     state.peekAckByPlayer.add(currentPlayerId);
-    // Auto-ack disconnected (so a dropped player doesn't block start)
     for (const [pid, p] of state.players) if (!p.connected) state.peekAckByPlayer.add(pid);
 
     if (state.peekAckByPlayer.size === state.players.size) {
@@ -741,7 +1031,6 @@ io.on('connection', (socket) => {
       return ack({ error: 'Grace period not elapsed' });
     }
 
-    // Flip target's unlocked slots to revealed+locked
     if (state.golfHands) {
       const slots = state.golfHands.get(target.playerId);
       if (slots) {
@@ -751,12 +1040,10 @@ io.on('connection', (socket) => {
       }
     }
 
-    // If it was their turn, advance
     if (state.turnOrder && state.turnOrder[state.currentTurnIndex || 0] === target.playerId) {
       advanceTurn(state);
     }
 
-    // Auto-ack them in any active ack set
     state.peekAckByPlayer?.add(target.playerId);
     state.betweenRoundAckByPlayer.add(target.playerId);
     state.rematchAckByPlayer.add(target.playerId);
@@ -790,7 +1077,6 @@ io.on('connection', (socket) => {
   socket.on('golf:leaveGame', (_: {}, ack: (res: any) => void) => {
     const state = getState();
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
-    // Allowed in waiting and rematch-pending only
     if (state.phase !== 'waiting' && state.phase !== 'rematch-pending') {
       return ack({ error: 'Cannot leave mid-game; disconnect to stop playing' });
     }
@@ -800,7 +1086,6 @@ io.on('connection', (socket) => {
     state.players.delete(currentPlayerId);
     tokenIndex.delete(player.playerToken);
 
-    // If host left, hand off to next player; if no one left, drop game
     if (state.hostId === currentPlayerId) {
       const next = Array.from(state.players.keys())[0];
       if (next) state.hostId = next;
@@ -826,6 +1111,478 @@ io.on('connection', (socket) => {
     if (![4, 6, 8].includes(payload.cardsPerPlayer)) return ack({ error: 'Invalid cardsPerPlayer' });
     state.config.cardsPerPlayer = payload.cardsPerPlayer;
     broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  // ---- Cabo actions ----
+
+  socket.on('cabo:ackPeek', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands) return ack({ error: 'Not a Cabo game' });
+    if (!state.caboPeekPhaseActive) return ack({ error: 'Not in peek phase' });
+
+    if (!state.caboPeekAckByPlayer) state.caboPeekAckByPlayer = new Set();
+    state.caboPeekAckByPlayer.add(currentPlayerId);
+    for (const [pid, p] of state.players) if (!p.connected) state.caboPeekAckByPlayer.add(pid);
+
+    if (state.caboPeekAckByPlayer.size >= state.players.size) {
+      state.caboPeekPhaseActive = false;
+      state.phase = 'play';
+    }
+
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:draw', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands) return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
+    if (state.caboTurnOrder && state.caboTurnOrder[state.caboCurrentTurnIndex ?? 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
+    if (state.caboPendingDraw?.has(currentPlayerId)) return ack({ error: 'Already drew' });
+
+    caboEnsureDrawPile(state);
+    const card = state.extraDeck.pop();
+    if (!card) return ack({ error: 'No cards left' });
+
+    if (!state.caboPendingDraw) state.caboPendingDraw = new Map();
+    state.caboPendingDraw.set(currentPlayerId, card);
+
+    broadcastSnapshot(io, state);
+    ack({ ok: true, card });
+  });
+
+  socket.on('cabo:placeDrawn', (payload: { slotId: string }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
+
+    const drawn = state.caboPendingDraw?.get(currentPlayerId);
+    if (!drawn) return ack({ error: 'No pending draw' });
+
+    const slots = state.caboHands.get(currentPlayerId);
+    if (!slots) return ack({ error: 'No hand' });
+    const slotIdx = slots.findIndex((s) => s.slotId === payload.slotId);
+    if (slotIdx === -1) return ack({ error: 'Slot not found' });
+
+    const old = slots[slotIdx].card;
+    slots[slotIdx] = { slotId: slots[slotIdx].slotId, card: drawn };
+    state.discardPile.push(old);
+    state.caboPendingDraw!.delete(currentPlayerId);
+    state.caboBlackKingPending?.delete(currentPlayerId);
+    state.caboSnapGapPending?.delete(currentPlayerId);
+
+    emitToPlayer(io, state, currentPlayerId, 'cabo:hand', slots);
+    caboEndTurn(io, state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:discardDrawn', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
+
+    const drawn = state.caboPendingDraw?.get(currentPlayerId);
+    if (!drawn) return ack({ error: 'No pending draw' });
+
+    state.discardPile.push(drawn);
+    state.caboPendingDraw!.delete(currentPlayerId);
+    state.caboSnapGapPending?.delete(currentPlayerId);
+
+    caboEndTurn(io, state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:useSpecialPower', (payload: {
+    action: 'peek-own' | 'spy' | 'blind-swap' | 'black-king-see';
+    ownSlotId?: string;
+    targetPlayerId?: string;
+    targetSlotId?: string;
+  }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
+
+    const drawn = state.caboPendingDraw?.get(currentPlayerId);
+    if (!drawn) return ack({ error: 'No pending draw' });
+
+    const expectedAction = getCaboSpecialAction(drawn);
+    if (!expectedAction) return ack({ error: 'Card has no special action' });
+    if (payload.action !== expectedAction) return ack({ error: 'Wrong action for this card' });
+
+    const mySlots = state.caboHands.get(currentPlayerId);
+    if (!mySlots) return ack({ error: 'No hand' });
+
+    if (payload.action === 'peek-own') {
+      if (!payload.ownSlotId) return ack({ error: 'ownSlotId required' });
+      const slot = mySlots.find((s) => s.slotId === payload.ownSlotId);
+      if (!slot) return ack({ error: 'Slot not found' });
+
+      state.discardPile.push(drawn);
+      state.caboPendingDraw!.delete(currentPlayerId);
+
+      emitToPlayer(io, state, currentPlayerId, 'cabo:peekResult', { slotId: slot.slotId, card: slot.card });
+      caboEndTurn(io, state);
+      broadcastSnapshot(io, state);
+      return ack({ ok: true });
+    }
+
+    if (payload.action === 'spy') {
+      if (!payload.targetPlayerId || !payload.targetSlotId) return ack({ error: 'targetPlayerId and targetSlotId required' });
+      if (payload.targetPlayerId === currentPlayerId) return ack({ error: 'Cannot spy yourself' });
+      const targetSlots = state.caboHands.get(payload.targetPlayerId);
+      if (!targetSlots) return ack({ error: 'Target player not found' });
+      const slot = targetSlots.find((s) => s.slotId === payload.targetSlotId);
+      if (!slot) return ack({ error: 'Target slot not found' });
+
+      state.discardPile.push(drawn);
+      state.caboPendingDraw!.delete(currentPlayerId);
+
+      emitToPlayer(io, state, currentPlayerId, 'cabo:spyResult', {
+        targetPlayerId: payload.targetPlayerId,
+        slotId: slot.slotId,
+        card: slot.card,
+      });
+      caboEndTurn(io, state);
+      broadcastSnapshot(io, state);
+      return ack({ ok: true });
+    }
+
+    if (payload.action === 'blind-swap') {
+      if (!payload.ownSlotId || !payload.targetPlayerId || !payload.targetSlotId) {
+        return ack({ error: 'ownSlotId, targetPlayerId, targetSlotId required' });
+      }
+      if (payload.targetPlayerId === currentPlayerId) return ack({ error: 'Cannot swap with yourself' });
+      const ownSlot = mySlots.find((s) => s.slotId === payload.ownSlotId);
+      if (!ownSlot) return ack({ error: 'Own slot not found' });
+      const targetSlots = state.caboHands.get(payload.targetPlayerId);
+      if (!targetSlots) return ack({ error: 'Target player not found' });
+      const targetSlot = targetSlots.find((s) => s.slotId === payload.targetSlotId);
+      if (!targetSlot) return ack({ error: 'Target slot not found' });
+
+      const temp = ownSlot.card;
+      ownSlot.card = targetSlot.card;
+      targetSlot.card = temp;
+
+      state.discardPile.push(drawn);
+      state.caboPendingDraw!.delete(currentPlayerId);
+
+      emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
+      emitToPlayer(io, state, payload.targetPlayerId, 'cabo:hand', targetSlots);
+      caboEndTurn(io, state);
+      broadcastSnapshot(io, state);
+      return ack({ ok: true });
+    }
+
+    if (payload.action === 'black-king-see') {
+      if (!payload.targetPlayerId || !payload.targetSlotId) return ack({ error: 'targetPlayerId and targetSlotId required' });
+      if (payload.targetPlayerId === currentPlayerId) return ack({ error: 'Cannot target yourself' });
+      const targetSlots = state.caboHands.get(payload.targetPlayerId);
+      if (!targetSlots) return ack({ error: 'Target player not found' });
+      const slot = targetSlots.find((s) => s.slotId === payload.targetSlotId);
+      if (!slot) return ack({ error: 'Target slot not found' });
+
+      if (!state.caboBlackKingPending) state.caboBlackKingPending = new Map();
+      state.caboBlackKingPending.set(currentPlayerId, {
+        targetPlayerId: payload.targetPlayerId,
+        targetSlotId: payload.targetSlotId,
+      });
+
+      emitToPlayer(io, state, currentPlayerId, 'cabo:blackKingSeeResult', {
+        targetPlayerId: payload.targetPlayerId,
+        slotId: slot.slotId,
+        card: slot.card,
+      });
+      broadcastSnapshot(io, state);
+      return ack({ ok: true });
+    }
+
+    ack({ error: 'Unknown action' });
+  });
+
+  socket.on('cabo:blackKingDecide', (payload: { swap: boolean; ownSlotId?: string }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
+
+    const pending = state.caboBlackKingPending?.get(currentPlayerId);
+    if (!pending) return ack({ error: 'No black king pending' });
+
+    const drawn = state.caboPendingDraw?.get(currentPlayerId);
+    if (!drawn) return ack({ error: 'No pending draw' });
+
+    const mySlots = state.caboHands.get(currentPlayerId);
+    if (!mySlots) return ack({ error: 'No hand' });
+
+    if (payload.swap) {
+      if (!payload.ownSlotId) return ack({ error: 'ownSlotId required for swap' });
+      const ownSlot = mySlots.find((s) => s.slotId === payload.ownSlotId);
+      if (!ownSlot) return ack({ error: 'Own slot not found' });
+      const targetSlots = state.caboHands.get(pending.targetPlayerId);
+      if (!targetSlots) return ack({ error: 'Target no longer in game' });
+      const targetSlot = targetSlots.find((s) => s.slotId === pending.targetSlotId);
+      if (!targetSlot) return ack({ error: 'Target slot no longer exists' });
+
+      const temp = ownSlot.card;
+      ownSlot.card = targetSlot.card;
+      targetSlot.card = temp;
+
+      emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
+      emitToPlayer(io, state, pending.targetPlayerId, 'cabo:hand', targetSlots);
+    }
+
+    state.discardPile.push(drawn);
+    state.caboPendingDraw!.delete(currentPlayerId);
+    state.caboBlackKingPending!.delete(currentPlayerId);
+
+    caboEndTurn(io, state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:takeDiscard', (payload: { slotId: string }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
+    if (state.caboTurnOrder && state.caboTurnOrder[state.caboCurrentTurnIndex ?? 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
+    if (state.caboPendingDraw?.has(currentPlayerId)) return ack({ error: 'Already have a drawn card' });
+
+    const top = state.discardPile[state.discardPile.length - 1];
+    if (!top) return ack({ error: 'No discard card' });
+
+    const slots = state.caboHands.get(currentPlayerId);
+    if (!slots) return ack({ error: 'No hand' });
+    const slotIdx = slots.findIndex((s) => s.slotId === payload.slotId);
+    if (slotIdx === -1) return ack({ error: 'Slot not found' });
+
+    const old = slots[slotIdx].card;
+    slots[slotIdx] = { slotId: slots[slotIdx].slotId, card: top };
+    state.discardPile[state.discardPile.length - 1] = old;
+    state.caboSnapGapPending?.delete(currentPlayerId);
+
+    emitToPlayer(io, state, currentPlayerId, 'cabo:hand', slots);
+    caboEndTurn(io, state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:callCabo', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands) return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'play') return ack({ error: 'Cabo can only be called during play' });
+    if (state.caboTurnOrder && state.caboTurnOrder[state.caboCurrentTurnIndex ?? 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
+    if (state.caboPendingDraw?.has(currentPlayerId)) return ack({ error: 'Resolve your drawn card first' });
+
+    state.caboCallerId = currentPlayerId;
+    state.phase = 'cabo-called';
+    const numPlayers = state.caboTurnOrder!.length;
+    state.caboFinalTurnsLeft = numPlayers - 1;
+
+    // Find first valid player for final turns (skip caller and disconnected)
+    let idx = state.caboCurrentTurnIndex ?? 0;
+    let remaining = state.caboFinalTurnsLeft;
+
+    for (let i = 0; i < numPlayers; i++) {
+      idx = (idx + 1) % numPlayers;
+      const pid = state.caboTurnOrder![idx];
+      if (pid === currentPlayerId) continue;
+      const player = state.players.get(pid);
+      if (!player?.connected) {
+        remaining--;
+        if (remaining <= 0) {
+          state.caboCurrentTurnIndex = idx;
+          state.caboFinalTurnsLeft = 0;
+          broadcastSnapshot(io, state);
+          ack({ ok: true });
+          finalizeCaboRound(io, state);
+          broadcastSnapshot(io, state);
+          return;
+        }
+        continue;
+      }
+      state.caboCurrentTurnIndex = idx;
+      state.caboFinalTurnsLeft = remaining;
+      break;
+    }
+
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:snap', (payload: {
+    targetType: 'own' | 'opponent';
+    targetPlayerId?: string;
+    targetSlotId: string;
+  }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
+    if (state.phase === 'peek' || state.phase === 'between-rounds' || state.phase === 'rematch-pending' || state.phase === 'waiting') {
+      return ack({ error: 'Cannot snap in this phase' });
+    }
+
+    const discardTop = state.discardPile[state.discardPile.length - 1];
+    if (!discardTop) return ack({ error: 'No discard card' });
+
+    const targetPlayerId = payload.targetType === 'own' ? currentPlayerId : payload.targetPlayerId;
+    if (!targetPlayerId) return ack({ error: 'targetPlayerId required for opponent snap' });
+    if (payload.targetType === 'opponent' && targetPlayerId === currentPlayerId) {
+      return ack({ error: 'Cannot snap your own card as opponent snap' });
+    }
+
+    const targetSlots = state.caboHands.get(targetPlayerId);
+    if (!targetSlots) return ack({ error: 'Target player not found' });
+    const slotIdx = targetSlots.findIndex((s) => s.slotId === payload.targetSlotId);
+    if (slotIdx === -1) return ack({ error: 'Target slot not found' });
+
+    const targetCard = targetSlots[slotIdx].card;
+
+    if (targetCard.rank !== discardTop.rank) {
+      // Wrong snap: draw 2 penalty cards
+      const mySlots = state.caboHands.get(currentPlayerId)!;
+      for (let i = 0; i < 2; i++) {
+        caboEnsureDrawPile(state);
+        const penalty = state.extraDeck.pop();
+        if (penalty) {
+          mySlots.push({
+            slotId: `${currentPlayerId}:r${state.currentRound}:pen${Date.now()}${i}`,
+            card: penalty,
+          });
+        }
+      }
+      emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
+      broadcastSnapshot(io, state);
+      return ack({ ok: false, error: 'Wrong rank — 2 penalty cards drawn' });
+    }
+
+    // Correct snap: remove card from target's hand
+    targetSlots.splice(slotIdx, 1);
+    state.discardPile.push(targetCard);
+
+    emitToPlayer(io, state, targetPlayerId, 'cabo:hand', targetSlots);
+
+    if (payload.targetType === 'opponent') {
+      // Snapper can optionally slide one of their own cards into the gap
+      if (!state.caboSnapGapPending) state.caboSnapGapPending = new Map();
+      state.caboSnapGapPending.set(currentPlayerId, targetPlayerId);
+      emitToPlayer(io, state, currentPlayerId, 'cabo:snapGapAvailable', { opponentId: targetPlayerId });
+    }
+
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:snapSlide', (payload: { ownSlotId: string }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo' || !state.caboHands) return ack({ error: 'Not a Cabo game' });
+
+    const opponentId = state.caboSnapGapPending?.get(currentPlayerId);
+    if (!opponentId) return ack({ error: 'No snap gap pending' });
+
+    const mySlots = state.caboHands.get(currentPlayerId);
+    if (!mySlots) return ack({ error: 'No hand' });
+    const slotIdx = mySlots.findIndex((s) => s.slotId === payload.ownSlotId);
+    if (slotIdx === -1) return ack({ error: 'Slot not found' });
+
+    const opponentSlots = state.caboHands.get(opponentId);
+    if (!opponentSlots) return ack({ error: 'Opponent no longer in game' });
+
+    const slidCard = mySlots[slotIdx];
+    mySlots.splice(slotIdx, 1);
+    opponentSlots.push({ slotId: `${opponentId}:r${state.currentRound}:slid${Date.now()}`, card: slidCard.card });
+
+    state.caboSnapGapPending!.delete(currentPlayerId);
+
+    emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
+    emitToPlayer(io, state, opponentId, 'cabo:hand', opponentSlots);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:snapSlideDecline', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    state.caboSnapGapPending?.delete(currentPlayerId);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:ackNextRound', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo') return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'between-rounds') return ack({ error: 'Not between rounds' });
+    state.betweenRoundAckByPlayer.add(currentPlayerId);
+    autoAckDisconnected(state, state.betweenRoundAckByPlayer);
+    maybeCaboAdvanceRound(io, state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:ackRematch', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.config.gameMode !== 'cabo') return ack({ error: 'Not a Cabo game' });
+    if (state.phase !== 'rematch-pending') return ack({ error: 'Not in rematch phase' });
+    state.rematchAckByPlayer.add(currentPlayerId);
+    autoAckDisconnected(state, state.rematchAckByPlayer);
+
+    const required = Array.from(state.players.values()).filter((p) => p.connected).map((p) => p.playerId);
+    const allAck = required.length > 0 && required.every((pid) => state.rematchAckByPlayer.has(pid));
+    if (allAck) {
+      resetCaboForRematch(state);
+      broadcastSnapshot(io, state);
+      for (const pid of state.players.keys()) {
+        emitToPlayer(io, state, pid, 'cabo:hand', state.caboHands!.get(pid) ?? []);
+      }
+    } else {
+      broadcastSnapshot(io, state);
+    }
+    ack({ ok: true });
+  });
+
+  socket.on('cabo:leaveGame', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.phase !== 'waiting' && state.phase !== 'rematch-pending') {
+      return ack({ error: 'Cannot leave mid-game; disconnect to stop playing' });
+    }
+    const player = state.players.get(currentPlayerId);
+    if (!player) return ack({ error: 'Player not found' });
+
+    state.players.delete(currentPlayerId);
+    tokenIndex.delete(player.playerToken);
+
+    if (state.hostId === currentPlayerId) {
+      const next = Array.from(state.players.keys())[0];
+      if (next) state.hostId = next;
+    }
+    if (state.players.size === 0) {
+      codeToGameId.delete(state.code);
+      games.delete(state.gameId);
+    }
+
+    socket.leave(state.gameId);
+    currentGameId = null;
+    currentPlayerId = null;
+
+    if (games.has(state.gameId)) broadcastSnapshot(io, state);
     ack({ ok: true });
   });
 
@@ -877,19 +1634,34 @@ io.on('connection', (socket) => {
     if (!state) return;
     const player = state.players.get(currentPlayerId);
     if (!player) return;
-    if (player.currentSocketId !== socket.id) return; // a newer socket already took over
+    if (player.currentSocketId !== socket.id) return;
     player.connected = false;
     player.disconnectedAt = Date.now();
+
     // Auto-ack in any active ack set
     if (state.phase === 'between-rounds') state.betweenRoundAckByPlayer.add(currentPlayerId);
     if (state.phase === 'rematch-pending') state.rematchAckByPlayer.add(currentPlayerId);
     state.peekAckByPlayer?.add(currentPlayerId);
+    state.caboPeekAckByPlayer?.add(currentPlayerId);
 
     broadcastSnapshot(io, state);
-    // If we were waiting on between-round/rematch and only this player was missing, advance
+
     if (state.phase === 'between-rounds') {
-      maybeAdvanceRound(io, state);
-      broadcastSnapshot(io, state); // re-broadcast after potential phase change to peek
+      if (state.config.gameMode === 'cabo') {
+        maybeCaboAdvanceRound(io, state);
+      } else {
+        maybeAdvanceRound(io, state);
+      }
+      broadcastSnapshot(io, state);
+    }
+
+    // If disconnected player had their turn in cabo-called, auto-advance
+    if (state.config.gameMode === 'cabo' && state.phase === 'cabo-called' && state.caboTurnOrder) {
+      const currentTurnPid = state.caboTurnOrder[state.caboCurrentTurnIndex ?? 0];
+      if (currentTurnPid === currentPlayerId) {
+        caboEndTurn(io, state);
+        broadcastSnapshot(io, state);
+      }
     }
   });
 });
