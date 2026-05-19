@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.gitignore
+*.md
+src/e2e.ts
+src/e2e-golf.ts
+src/test-dealing.ts
+fly.toml
+Dockerfile
+.dockerignore
