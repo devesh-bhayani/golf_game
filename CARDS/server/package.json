@@ -14,7 +14,8 @@
     "e2e:cabo": "node --loader ts-node/esm src/e2e-cabo.ts",
     "test:dealing": "node --loader ts-node/esm src/test-dealing.ts",
     "test:dealing:golf": "node --loader ts-node/esm src/test-dealing-golf.ts",
-    "test:reaper": "node --loader ts-node/esm src/test-reaper.ts"
+    "test:reaper": "node --loader ts-node/esm src/test-reaper.ts",
+    "test:validation": "node --loader ts-node/esm src/test-validation.ts"
 	},
 	"dependencies": {
 		"cors": "^2.8.5",

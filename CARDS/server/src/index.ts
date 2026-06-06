@@ -138,6 +138,58 @@ function reapStaleGames(now: number = Date.now()): number {
   return removed;
 }
 
+// ---------- input validation ----------
+// The server trusts nothing from clients. Names are bounded/stripped and the
+// game config is rebuilt from a whitelist so a hostile payload can't, e.g.,
+// drive a huge cardsPerPlayer into the deck allocator.
+const MAX_NAME_LEN = 24;
+const VALID_MODES: GameMode[] = ['classic', 'golf', 'cabo'];
+
+function sanitizeName(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  let cleaned = '';
+  for (const ch of raw) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) continue; // skip ASCII control chars
+    cleaned += ch;
+  }
+  cleaned = cleaned.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LEN);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function sanitizeConfig(raw: any): GameConfig {
+  const gameMode: GameMode = VALID_MODES.includes(raw?.gameMode) ? raw.gameMode : 'classic';
+  let cardsPerPlayer: number;
+  if (gameMode === 'cabo') {
+    cardsPerPlayer = 4; // fixed by the rules
+  } else if (gameMode === 'golf') {
+    cardsPerPlayer = [4, 6, 8].includes(raw?.cardsPerPlayer) ? raw.cardsPerPlayer : 4;
+  } else {
+    cardsPerPlayer = clampInt(raw?.cardsPerPlayer, 1, 13, 5);
+  }
+  return {
+    maxPlayers: clampInt(raw?.maxPlayers, 2, 8, 8),
+    totalCardsPerDeck: 52,
+    numberOfDecks: 1, // recomputed from table size at deal time
+    cardsPerPlayer,
+    gameMode,
+  };
+}
+
+// ---------- rate limiting ----------
+// Per-socket sliding window on the abuse-prone connection events (game
+// creation spam, join-code brute forcing). State lives in the connection
+// closure so it is freed when the socket disconnects.
+const RATE_LIMITS: Record<string, { windowMs: number; max: number }> = {
+  createGame: { windowMs: 10_000, max: 5 },
+  joinGame: { windowMs: 10_000, max: 30 },
+};
+
 // ---------- helpers ----------
 
 function createStandardDeck(deckIndex: number, gameId: string): Card[] {
@@ -788,11 +840,29 @@ io.on('connection', (socket) => {
     return games.get(currentGameId) ?? null;
   }
 
+  // Per-socket sliding-window rate limiter. Returns true when the caller has
+  // exceeded the budget for `event` and should be rejected.
+  const rateHits = new Map<string, number[]>();
+  function rateLimited(event: string): boolean {
+    const cfg = RATE_LIMITS[event];
+    if (!cfg) return false;
+    const now = Date.now();
+    const recent = (rateHits.get(event) ?? []).filter((t) => now - t < cfg.windowMs);
+    if (recent.length >= cfg.max) {
+      rateHits.set(event, recent);
+      return true;
+    }
+    recent.push(now);
+    rateHits.set(event, recent);
+    return false;
+  }
+
   socket.on('createGame', (payload: { displayName?: string; config: GameConfig }, ack: (res: any) => void) => {
+    if (rateLimited('createGame')) return ack({ error: 'Too many games created, slow down' });
     const gameId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let code = nano4();
     while (codeToGameId.has(code)) code = nano4();
-    const config = payload.config;
+    const config = sanitizeConfig(payload?.config);
 
     const playerId = nanoPlayerId();
     const playerToken = nanoToken();
@@ -820,7 +890,7 @@ io.on('connection', (socket) => {
       playerId,
       playerToken,
       currentSocketId: socket.id,
-      displayName: payload.displayName || 'Host',
+      displayName: sanitizeName(payload?.displayName, 'Host'),
       connected: true,
     };
     state.players.set(playerId, player);
@@ -837,6 +907,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('joinGame', (payload: { code: string; displayName?: string }, ack: (res: any) => void) => {
+    if (rateLimited('joinGame')) return ack({ error: 'Too many join attempts, slow down' });
+    if (typeof payload?.code !== 'string') return ack({ error: 'Invalid code' });
     const gameId = codeToGameId.get(payload.code);
     if (!gameId) return ack({ error: 'Invalid code' });
     const state = games.get(gameId);
@@ -850,7 +922,7 @@ io.on('connection', (socket) => {
       playerId,
       playerToken,
       currentSocketId: socket.id,
-      displayName: payload.displayName || `Player ${state.players.size + 1}`,
+      displayName: sanitizeName(payload?.displayName, `Player ${state.players.size + 1}`),
       connected: true,
     };
     state.players.set(playerId, player);
