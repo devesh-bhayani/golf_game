@@ -11,6 +11,7 @@
     "dev": "node --loader ts-node/esm --watch src/index.ts",
     "e2e": "node --loader ts-node/esm src/e2e.ts",
     "e2e:golf": "node --loader ts-node/esm src/e2e-golf.ts",
+    "e2e:cabo": "node --loader ts-node/esm src/e2e-cabo.ts",
     "test:dealing": "node --loader ts-node/esm src/test-dealing.ts",
     "test:dealing:golf": "node --loader ts-node/esm src/test-dealing-golf.ts",
     "test:reaper": "node --loader ts-node/esm src/test-reaper.ts"
