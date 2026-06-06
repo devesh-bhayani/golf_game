@@ -228,6 +228,35 @@ function createDecks(numberOfDecks: number, gameId: string): Card[] {
   return cards;
 }
 
+// ---------- test-only deterministic deck injection ----------
+// Strictly gated behind TEST_HOOKS=1. When enabled, a test can pre-stack an
+// exact, unshuffled deck so card-dependent paths (Cabo special powers, snaps)
+// can be exercised deterministically. With the gate off, none of this code is
+// reachable and dealing behaves exactly as before.
+const TEST_HOOKS = process.env.TEST_HOOKS === '1';
+const injectedDecks: Card[][] = [];
+
+function buildCard(rank: Rank, suit: Suit, gameId: string, idx: number): Card {
+  const color: 'red' | 'black' = suit === 'hearts' || suit === 'diamonds' ? 'red' : 'black';
+  let value: number;
+  if (rank === 'A') value = 1;
+  else if (rank === 'J') value = 11;
+  else if (rank === 'Q') value = 12;
+  else if (rank === 'K') value = 13;
+  else value = parseInt(rank);
+  return { cardId: `${gameId}:inj:${suit}:${rank}:${idx}`, suit, rank, color, value };
+}
+
+// Returns a pre-stacked deck if one is queued (test mode only), else null.
+function takeInjectedDeck(): Card[] | null {
+  if (!TEST_HOOKS) return null;
+  return injectedDecks.shift() ?? null;
+}
+
+function dealDeck(state: GameState): Card[] {
+  return takeInjectedDeck() ?? createDecks(state.config.numberOfDecks, state.gameId);
+}
+
 const CARDS_PER_DECK = 52;
 // Extra cards beyond what's dealt, so there's a usable draw pile (+1 discard start)
 // before any reshuffle is needed.
@@ -247,7 +276,7 @@ function dealCards(state: GameState): void {
   const cardsPerPlayer = state.config.cardsPerPlayer;
   state.hands = new Map<string, Card[]>(playerIds.map((p) => [p, []]));
   state.config.numberOfDecks = decksNeeded(numPlayers, cardsPerPlayer);
-  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+  const fullDeck = dealDeck(state);
   for (let i = 0; i < cardsPerPlayer * numPlayers && i < fullDeck.length; i++) {
     const playerIndex = i % numPlayers;
     state.hands.get(playerIds[playerIndex])!.push(fullDeck[i]);
@@ -261,7 +290,7 @@ function dealGolfRound(state: GameState): void {
   const cardsPerPlayer = state.config.cardsPerPlayer;
 
   state.config.numberOfDecks = decksNeeded(numPlayers, cardsPerPlayer);
-  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+  const fullDeck = dealDeck(state);
 
   state.golfHands = new Map<string, GolfSlot[]>();
   state.turnOrder = playerIds;
@@ -384,7 +413,7 @@ function dealCaboRound(state: GameState): void {
   const CARDS_PER_PLAYER = 4;
 
   state.config.numberOfDecks = decksNeeded(numPlayers, CARDS_PER_PLAYER);
-  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+  const fullDeck = dealDeck(state);
 
   state.caboHands = new Map<string, CaboSlot[]>();
   state.caboTurnOrder = playerIds;
@@ -855,6 +884,17 @@ io.on('connection', (socket) => {
     recent.push(now);
     rateHits.set(event, recent);
     return false;
+  }
+
+  // Test-only: pre-stack an exact deck for the next deal. Registered only when
+  // TEST_HOOKS=1 so it never exists in a normal/production server.
+  if (TEST_HOOKS) {
+    socket.on('__test:stackDeck', (payload: { cards: Array<{ rank: Rank; suit: Suit }> }, ack: (res: any) => void) => {
+      if (!Array.isArray(payload?.cards)) return ack({ error: 'cards[] required' });
+      const deck = payload.cards.map((c, i) => buildCard(c.rank, c.suit, 'test', i));
+      injectedDecks.push(deck);
+      ack({ ok: true, size: deck.length });
+    });
   }
 
   socket.on('createGame', (payload: { displayName?: string; config: GameConfig }, ack: (res: any) => void) => {
