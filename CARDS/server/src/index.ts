@@ -107,6 +107,37 @@ const games = new Map<string, GameState>();
 const tokenIndex = new Map<string, { gameId: string; playerId: string }>();
 const globalLeaderboard: Array<{ playerId: string; displayName: string; totalScore: number; gamesPlayed: number }> = [];
 
+// ---------- abandoned-game reaper ----------
+// State lives only in memory, so games where everyone has disconnected (closed
+// the tab) would otherwise leak forever. Sweep them periodically once every
+// player has been gone longer than GAME_TTL_MS.
+const GAME_TTL_MS = Number(process.env.GAME_TTL_MS) || 1000 * 60 * 60; // 1h
+const REAP_INTERVAL_MS = Number(process.env.REAP_INTERVAL_MS) || 1000 * 60 * 5; // 5m
+
+function removeGame(state: GameState): void {
+  codeToGameId.delete(state.code);
+  games.delete(state.gameId);
+  for (const p of state.players.values()) tokenIndex.delete(p.playerToken);
+}
+
+// Returns the number of games removed. Pure w.r.t. `now` so it can be tested
+// without waiting on wall-clock time.
+function reapStaleGames(now: number = Date.now()): number {
+  let removed = 0;
+  for (const state of Array.from(games.values())) {
+    const players = Array.from(state.players.values());
+    const allGone = players.length === 0 || players.every((p) => !p.connected);
+    if (!allGone) continue;
+    // Most recent moment any player was still connected.
+    const lastSeen = players.reduce((max, p) => Math.max(max, p.disconnectedAt ?? 0), 0);
+    if (now - lastSeen >= GAME_TTL_MS) {
+      removeGame(state);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 // ---------- helpers ----------
 
 function createStandardDeck(deckIndex: number, gameId: string): Card[] {
@@ -145,11 +176,25 @@ function createDecks(numberOfDecks: number, gameId: string): Card[] {
   return cards;
 }
 
+const CARDS_PER_DECK = 52;
+// Extra cards beyond what's dealt, so there's a usable draw pile (+1 discard start)
+// before any reshuffle is needed.
+const DRAW_PILE_HEADROOM = 12;
+
+// Compute how many standard decks are needed so every player can be dealt their
+// cards AND a sensible draw/discard pile remains. The client's numberOfDecks is
+// never trusted for this — table size drives it.
+function decksNeeded(numPlayers: number, cardsPerPlayer: number): number {
+  const cardsRequired = numPlayers * cardsPerPlayer + DRAW_PILE_HEADROOM;
+  return Math.max(1, Math.ceil(cardsRequired / CARDS_PER_DECK));
+}
+
 function dealCards(state: GameState): void {
   const playerIds = Array.from(state.players.keys());
   const numPlayers = playerIds.length;
   const cardsPerPlayer = state.config.cardsPerPlayer;
   state.hands = new Map<string, Card[]>(playerIds.map((p) => [p, []]));
+  state.config.numberOfDecks = decksNeeded(numPlayers, cardsPerPlayer);
   const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
   for (let i = 0; i < cardsPerPlayer * numPlayers && i < fullDeck.length; i++) {
     const playerIndex = i % numPlayers;
@@ -163,6 +208,7 @@ function dealGolfRound(state: GameState): void {
   const numPlayers = playerIds.length;
   const cardsPerPlayer = state.config.cardsPerPlayer;
 
+  state.config.numberOfDecks = decksNeeded(numPlayers, cardsPerPlayer);
   const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
 
   state.golfHands = new Map<string, GolfSlot[]>();
@@ -285,6 +331,7 @@ function dealCaboRound(state: GameState): void {
   const numPlayers = playerIds.length;
   const CARDS_PER_PLAYER = 4;
 
+  state.config.numberOfDecks = decksNeeded(numPlayers, CARDS_PER_PLAYER);
   const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
 
   state.caboHands = new Map<string, CaboSlot[]>();
@@ -1670,3 +1717,11 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
+
+// Periodically free games everyone has abandoned. unref() so the timer never
+// keeps the process alive on its own.
+const reaper = setInterval(() => {
+  const removed = reapStaleGames();
+  if (removed > 0) console.log(`Reaped ${removed} abandoned game(s)`);
+}, REAP_INTERVAL_MS);
+reaper.unref();

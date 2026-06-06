@@ -13,7 +13,7 @@
     "lib": ["ES2020"]
   },
   "include": ["src"],
-  "exclude": ["src/e2e.ts", "src/e2e-golf.ts", "src/test-dealing.ts"]
+  "exclude": ["src/e2e.ts", "src/e2e-golf.ts", "src/test-dealing.ts", "src/test-dealing-golf.ts", "src/test-reaper.ts"]
 }
 
 
