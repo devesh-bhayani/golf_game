@@ -107,6 +107,89 @@ const games = new Map<string, GameState>();
 const tokenIndex = new Map<string, { gameId: string; playerId: string }>();
 const globalLeaderboard: Array<{ playerId: string; displayName: string; totalScore: number; gamesPlayed: number }> = [];
 
+// ---------- abandoned-game reaper ----------
+// State lives only in memory, so games where everyone has disconnected (closed
+// the tab) would otherwise leak forever. Sweep them periodically once every
+// player has been gone longer than GAME_TTL_MS.
+const GAME_TTL_MS = Number(process.env.GAME_TTL_MS) || 1000 * 60 * 60; // 1h
+const REAP_INTERVAL_MS = Number(process.env.REAP_INTERVAL_MS) || 1000 * 60 * 5; // 5m
+
+function removeGame(state: GameState): void {
+  codeToGameId.delete(state.code);
+  games.delete(state.gameId);
+  for (const p of state.players.values()) tokenIndex.delete(p.playerToken);
+}
+
+// Returns the number of games removed. Pure w.r.t. `now` so it can be tested
+// without waiting on wall-clock time.
+function reapStaleGames(now: number = Date.now()): number {
+  let removed = 0;
+  for (const state of Array.from(games.values())) {
+    const players = Array.from(state.players.values());
+    const allGone = players.length === 0 || players.every((p) => !p.connected);
+    if (!allGone) continue;
+    // Most recent moment any player was still connected.
+    const lastSeen = players.reduce((max, p) => Math.max(max, p.disconnectedAt ?? 0), 0);
+    if (now - lastSeen >= GAME_TTL_MS) {
+      removeGame(state);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+// ---------- input validation ----------
+// The server trusts nothing from clients. Names are bounded/stripped and the
+// game config is rebuilt from a whitelist so a hostile payload can't, e.g.,
+// drive a huge cardsPerPlayer into the deck allocator.
+const MAX_NAME_LEN = 24;
+const VALID_MODES: GameMode[] = ['classic', 'golf', 'cabo'];
+
+function sanitizeName(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  let cleaned = '';
+  for (const ch of raw) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) continue; // skip ASCII control chars
+    cleaned += ch;
+  }
+  cleaned = cleaned.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LEN);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function sanitizeConfig(raw: any): GameConfig {
+  const gameMode: GameMode = VALID_MODES.includes(raw?.gameMode) ? raw.gameMode : 'classic';
+  let cardsPerPlayer: number;
+  if (gameMode === 'cabo') {
+    cardsPerPlayer = 4; // fixed by the rules
+  } else if (gameMode === 'golf') {
+    cardsPerPlayer = [4, 6, 8].includes(raw?.cardsPerPlayer) ? raw.cardsPerPlayer : 4;
+  } else {
+    cardsPerPlayer = clampInt(raw?.cardsPerPlayer, 1, 13, 5);
+  }
+  return {
+    maxPlayers: clampInt(raw?.maxPlayers, 2, 8, 8),
+    totalCardsPerDeck: 52,
+    numberOfDecks: 1, // recomputed from table size at deal time
+    cardsPerPlayer,
+    gameMode,
+  };
+}
+
+// ---------- rate limiting ----------
+// Per-socket sliding window on the abuse-prone connection events (game
+// creation spam, join-code brute forcing). State lives in the connection
+// closure so it is freed when the socket disconnects.
+const RATE_LIMITS: Record<string, { windowMs: number; max: number }> = {
+  createGame: { windowMs: 10_000, max: 5 },
+  joinGame: { windowMs: 10_000, max: 30 },
+};
+
 // ---------- helpers ----------
 
 function createStandardDeck(deckIndex: number, gameId: string): Card[] {
@@ -145,12 +228,55 @@ function createDecks(numberOfDecks: number, gameId: string): Card[] {
   return cards;
 }
 
+// ---------- test-only deterministic deck injection ----------
+// Strictly gated behind TEST_HOOKS=1. When enabled, a test can pre-stack an
+// exact, unshuffled deck so card-dependent paths (Cabo special powers, snaps)
+// can be exercised deterministically. With the gate off, none of this code is
+// reachable and dealing behaves exactly as before.
+const TEST_HOOKS = process.env.TEST_HOOKS === '1';
+const injectedDecks: Card[][] = [];
+
+function buildCard(rank: Rank, suit: Suit, gameId: string, idx: number): Card {
+  const color: 'red' | 'black' = suit === 'hearts' || suit === 'diamonds' ? 'red' : 'black';
+  let value: number;
+  if (rank === 'A') value = 1;
+  else if (rank === 'J') value = 11;
+  else if (rank === 'Q') value = 12;
+  else if (rank === 'K') value = 13;
+  else value = parseInt(rank);
+  return { cardId: `${gameId}:inj:${suit}:${rank}:${idx}`, suit, rank, color, value };
+}
+
+// Returns a pre-stacked deck if one is queued (test mode only), else null.
+function takeInjectedDeck(): Card[] | null {
+  if (!TEST_HOOKS) return null;
+  return injectedDecks.shift() ?? null;
+}
+
+function dealDeck(state: GameState): Card[] {
+  return takeInjectedDeck() ?? createDecks(state.config.numberOfDecks, state.gameId);
+}
+
+const CARDS_PER_DECK = 52;
+// Extra cards beyond what's dealt, so there's a usable draw pile (+1 discard start)
+// before any reshuffle is needed.
+const DRAW_PILE_HEADROOM = 12;
+
+// Compute how many standard decks are needed so every player can be dealt their
+// cards AND a sensible draw/discard pile remains. The client's numberOfDecks is
+// never trusted for this — table size drives it.
+function decksNeeded(numPlayers: number, cardsPerPlayer: number): number {
+  const cardsRequired = numPlayers * cardsPerPlayer + DRAW_PILE_HEADROOM;
+  return Math.max(1, Math.ceil(cardsRequired / CARDS_PER_DECK));
+}
+
 function dealCards(state: GameState): void {
   const playerIds = Array.from(state.players.keys());
   const numPlayers = playerIds.length;
   const cardsPerPlayer = state.config.cardsPerPlayer;
   state.hands = new Map<string, Card[]>(playerIds.map((p) => [p, []]));
-  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+  state.config.numberOfDecks = decksNeeded(numPlayers, cardsPerPlayer);
+  const fullDeck = dealDeck(state);
   for (let i = 0; i < cardsPerPlayer * numPlayers && i < fullDeck.length; i++) {
     const playerIndex = i % numPlayers;
     state.hands.get(playerIds[playerIndex])!.push(fullDeck[i]);
@@ -163,7 +289,8 @@ function dealGolfRound(state: GameState): void {
   const numPlayers = playerIds.length;
   const cardsPerPlayer = state.config.cardsPerPlayer;
 
-  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+  state.config.numberOfDecks = decksNeeded(numPlayers, cardsPerPlayer);
+  const fullDeck = dealDeck(state);
 
   state.golfHands = new Map<string, GolfSlot[]>();
   state.turnOrder = playerIds;
@@ -285,7 +412,8 @@ function dealCaboRound(state: GameState): void {
   const numPlayers = playerIds.length;
   const CARDS_PER_PLAYER = 4;
 
-  const fullDeck = createDecks(state.config.numberOfDecks, state.gameId);
+  state.config.numberOfDecks = decksNeeded(numPlayers, CARDS_PER_PLAYER);
+  const fullDeck = dealDeck(state);
 
   state.caboHands = new Map<string, CaboSlot[]>();
   state.caboTurnOrder = playerIds;
@@ -741,11 +869,40 @@ io.on('connection', (socket) => {
     return games.get(currentGameId) ?? null;
   }
 
+  // Per-socket sliding-window rate limiter. Returns true when the caller has
+  // exceeded the budget for `event` and should be rejected.
+  const rateHits = new Map<string, number[]>();
+  function rateLimited(event: string): boolean {
+    const cfg = RATE_LIMITS[event];
+    if (!cfg) return false;
+    const now = Date.now();
+    const recent = (rateHits.get(event) ?? []).filter((t) => now - t < cfg.windowMs);
+    if (recent.length >= cfg.max) {
+      rateHits.set(event, recent);
+      return true;
+    }
+    recent.push(now);
+    rateHits.set(event, recent);
+    return false;
+  }
+
+  // Test-only: pre-stack an exact deck for the next deal. Registered only when
+  // TEST_HOOKS=1 so it never exists in a normal/production server.
+  if (TEST_HOOKS) {
+    socket.on('__test:stackDeck', (payload: { cards: Array<{ rank: Rank; suit: Suit }> }, ack: (res: any) => void) => {
+      if (!Array.isArray(payload?.cards)) return ack({ error: 'cards[] required' });
+      const deck = payload.cards.map((c, i) => buildCard(c.rank, c.suit, 'test', i));
+      injectedDecks.push(deck);
+      ack({ ok: true, size: deck.length });
+    });
+  }
+
   socket.on('createGame', (payload: { displayName?: string; config: GameConfig }, ack: (res: any) => void) => {
+    if (rateLimited('createGame')) return ack({ error: 'Too many games created, slow down' });
     const gameId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let code = nano4();
     while (codeToGameId.has(code)) code = nano4();
-    const config = payload.config;
+    const config = sanitizeConfig(payload?.config);
 
     const playerId = nanoPlayerId();
     const playerToken = nanoToken();
@@ -773,7 +930,7 @@ io.on('connection', (socket) => {
       playerId,
       playerToken,
       currentSocketId: socket.id,
-      displayName: payload.displayName || 'Host',
+      displayName: sanitizeName(payload?.displayName, 'Host'),
       connected: true,
     };
     state.players.set(playerId, player);
@@ -790,6 +947,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('joinGame', (payload: { code: string; displayName?: string }, ack: (res: any) => void) => {
+    if (rateLimited('joinGame')) return ack({ error: 'Too many join attempts, slow down' });
+    if (typeof payload?.code !== 'string') return ack({ error: 'Invalid code' });
     const gameId = codeToGameId.get(payload.code);
     if (!gameId) return ack({ error: 'Invalid code' });
     const state = games.get(gameId);
@@ -803,7 +962,7 @@ io.on('connection', (socket) => {
       playerId,
       playerToken,
       currentSocketId: socket.id,
-      displayName: payload.displayName || `Player ${state.players.size + 1}`,
+      displayName: sanitizeName(payload?.displayName, `Player ${state.players.size + 1}`),
       connected: true,
     };
     state.players.set(playerId, player);
@@ -1670,3 +1829,11 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
+
+// Periodically free games everyone has abandoned. unref() so the timer never
+// keeps the process alive on its own.
+const reaper = setInterval(() => {
+  const removed = reapStaleGames();
+  if (removed > 0) console.log(`Reaped ${removed} abandoned game(s)`);
+}, REAP_INTERVAL_MS);
+reaper.unref();

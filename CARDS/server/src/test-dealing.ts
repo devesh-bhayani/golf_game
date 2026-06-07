@@ -6,6 +6,14 @@ function delay(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Mirror of the server's deck-sizing rule (server/src/index.ts decksNeeded).
+const CARDS_PER_DECK = 52;
+const DRAW_PILE_HEADROOM = 12;
+function decksNeeded(numPlayers: number, cardsPerPlayer: number): number {
+	const cardsRequired = numPlayers * cardsPerPlayer + DRAW_PILE_HEADROOM;
+	return Math.max(1, Math.ceil(cardsRequired / CARDS_PER_DECK));
+}
+
 async function testDealing(players: number, cardsPerPlayer: number) {
 	console.log(`\nTesting ${players} players, ${cardsPerPlayer} cards each:`);
 	
@@ -66,8 +74,9 @@ async function testDealing(players: number, cardsPerPlayer: number) {
 		}
 	}
 
-	const expectedExtra = 52 - (players * cardsPerPlayer);
-	console.log(`  Total dealt: ${totalDealt}, Expected extra: ${expectedExtra}`);
+	const deckTotal = decksNeeded(players, cardsPerPlayer) * 52;
+	const expectedExtra = deckTotal - (players * cardsPerPlayer);
+	console.log(`  Total dealt: ${totalDealt}, deck total: ${deckTotal}, Expected extra: ${expectedExtra}`);
 
 	// Check game state
 	await delay(200);
@@ -89,10 +98,12 @@ async function testDealing(players: number, cardsPerPlayer: number) {
 
 async function runTests() {
 	try {
-		await testDealing(2, 5);  // 2 players, 5 cards each = 10 dealt, 42 remaining
-		await testDealing(3, 7);  // 3 players, 7 cards each = 21 dealt, 31 remaining  
-		await testDealing(4, 13); // 4 players, 13 cards each = 52 dealt, 0 remaining
-		await testDealing(2, 1);  // 2 players, 1 card each = 2 dealt, 50 remaining
+		await testDealing(2, 5);  // 1 deck: 10 dealt, 42 remaining
+		await testDealing(3, 7);  // 1 deck: 21 dealt, 31 remaining
+		await testDealing(4, 13); // 2 decks: 52 dealt, 52 remaining (was 0 — broken before fix)
+		await testDealing(2, 1);  // 1 deck: 2 dealt, 50 remaining
+		await testDealing(8, 8);  // 2 decks: 64 dealt, 40 remaining (overflowed 1 deck before fix)
+		await testDealing(8, 13); // 3 decks: 104 dealt, 52 remaining (largest reachable table)
 		console.log('\n✅ All dealing tests passed!');
 	} catch (error) {
 		console.error('\n❌ Test failed:', error);
