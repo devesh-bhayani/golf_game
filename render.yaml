@@ -1,0 +1,25 @@
+# Render Blueprint — deploys the Socket.IO server (CARDS/server).
+# The client stays on Vercel; point its VITE_SERVER_URL at this service's URL.
+#
+# Deploy: push this branch, then in the Render dashboard
+#   New + → Blueprint → pick this repo → it reads render.yaml.
+# Render auto-assigns https://<name>.onrender.com (random suffix if the
+# name is taken) and injects PORT — the server already reads process.env.PORT.
+services:
+  - type: web
+    name: golf-cards-api
+    runtime: node
+    plan: free
+    rootDir: CARDS/server
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Lock this to your Vercel client URL once known, e.g.
+      #   https://golf-game.vercel.app
+      # Left as * so the first smoke test works before the client is wired.
+      - key: ALLOWED_ORIGIN
+        value: "*"
