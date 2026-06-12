@@ -2,26 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
 const globalStyles = `
-  @keyframes float {
-    0%, 100% { transform: translate(-50%, -50%) rotate(0deg); }
-    33% { transform: translate(-48%, -52%) rotate(1deg); }
-    66% { transform: translate(-52%, -48%) rotate(-1deg); }
-  }
-  @keyframes cardHover {
-    0% { transform: translateY(0) scale(1); }
-    100% { transform: translateY(-4px) scale(1.05); }
-  }
   @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
+    from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateX(-20px); }
-    to { opacity: 1; transform: translateX(0); }
-  }
-  @keyframes glow {
-    0%, 100% { box-shadow: 0 0 5px rgba(14, 165, 233, 0.3); }
-    50% { box-shadow: 0 0 20px rgba(14, 165, 233, 0.6); }
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
@@ -33,18 +16,12 @@ const globalStyles = `
     100% { transform: scaleX(1); }
   }
   @keyframes slotPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.55); }
-    50%       { box-shadow: 0 0 0 7px rgba(14, 165, 233, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(209, 168, 69, 0.5); }
+    50%       { box-shadow: 0 0 0 6px rgba(209, 168, 69, 0); }
   }
   @keyframes snapPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-    50%       { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
-  }
-  @keyframes floatUpDrift {
-    0%   { transform: translateY(110vh) rotate(0deg);   opacity: 0; }
-    8%   { opacity: 1; }
-    92%  { opacity: 1; }
-    100% { transform: translateY(-15vh) rotate(200deg); opacity: 0; }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(207, 90, 66, 0.65); }
+    50%       { box-shadow: 0 0 0 7px rgba(207, 90, 66, 0); }
   }
   @keyframes confettiFall {
     0%   { transform: translateY(0) rotate(0deg) scaleX(1);    opacity: 1; }
@@ -59,18 +36,30 @@ const globalStyles = `
     80%     { transform: translateX(3px)  rotate(1deg); }
   }
   @keyframes viewEnter {
-    from { opacity: 0; transform: translateY(16px); }
+    from { opacity: 0; transform: translateY(10px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  .card-hover:hover { animation: cardHover 0.3s ease-in-out forwards; }
-  .fade-in   { animation: fadeIn   0.6s ease-out; }
-  .slide-in  { animation: slideIn  0.4s ease-out; }
-  .view-enter { animation: viewEnter 0.35s ease-out; }
-  .glow      { animation: glow     2s ease-in-out infinite; }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in   { animation: fadeIn 0.4s ease-out; }
+  .view-enter { animation: viewEnter 0.3s ease-out; }
   .slot-pulse { animation: slotPulse 1.4s ease-in-out infinite; }
   .snap-pulse { animation: snapPulse 0.9s ease-in-out infinite; }
   .slot-flip  { animation: flipReveal 0.5s ease-in-out; }
   .deck-shake { animation: deckShake 0.45s ease-in-out; }
+  .toast-in   { animation: toastIn 0.25s ease-out; }
+
+  button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid #d1a845;
+    outline-offset: 2px;
+  }
+  ::selection { background: rgba(209, 168, 69, 0.35); }
+  input::placeholder { color: #5c6e60; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
 `;
 
 if (typeof document !== 'undefined') {
@@ -79,31 +68,42 @@ if (typeof document !== 'undefined') {
   document.head.appendChild(s);
 }
 
+// Design tokens — "midnight card room": deep felt green surfaces, warm ivory
+// text, brass-gold accent. One accent for actions/selection (primary), slate
+// blue reserved for Cabo special powers (secondary), sage for success, ember
+// for warnings, clay for errors. Neutrals are green-tinted to sit on the felt.
 const theme = {
   colors: {
-    primary: { 50: '#f0f9ff', 100: '#e0f2fe', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1', 900: '#0c4a6e' },
-    secondary: { 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9' },
-    success: { 500: '#10b981', 600: '#059669', 700: '#047857' },
-    warning: { 500: '#f59e0b', 600: '#d97706' },
-    error: { 500: '#ef4444', 600: '#dc2626' },
+    primary: {
+      50: '#fbf7ea', 100: '#f5ecd0', 300: '#e7cc8a', 400: '#ddbb66',
+      500: '#d1a845', 600: '#b58e33', 700: '#8e6e26', 900: '#50390f',
+    },
+    secondary: {
+      300: '#aebfd8', 400: '#92a8c9', 500: '#7490b5',
+      600: '#5b779c', 700: '#475e7d', 900: '#232f40',
+    },
+    success: { 400: '#8fbf94', 500: '#66a06e', 600: '#4d855a', 700: '#3b6a47' },
+    warning: { 400: '#e89b5a', 500: '#d97f33', 600: '#b96425' },
+    error: { 400: '#e07861', 500: '#cf5a42', 600: '#ad452f' },
     dark: {
-      50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 300: '#cbd5e1',
-      400: '#94a3b8', 500: '#64748b', 600: '#475569', 700: '#334155',
-      800: '#1e293b', 900: '#0f172a', 950: '#020617',
+      50: '#f5f4ec', 100: '#e9e9dc', 200: '#cdd6cb', 300: '#aebbaf',
+      400: '#8a9a8c', 500: '#5c6e60', 600: '#3a4f40', 700: '#273a2d',
+      800: '#16241b', 900: '#101b14', 950: '#0b130e',
     },
   },
   spacing: { xs: '0.25rem', sm: '0.5rem', md: '0.75rem', lg: '1rem', xl: '1.25rem', '2xl': '1.5rem', '3xl': '2rem', '4xl': '2.5rem', '5xl': '3rem' },
-  borderRadius: { sm: '0.25rem', md: '0.375rem', lg: '0.5rem', xl: '0.75rem', '2xl': '1rem', '3xl': '1.5rem' },
+  borderRadius: { sm: '0.25rem', md: '0.375rem', lg: '0.625rem', xl: '0.875rem', '2xl': '1rem', '3xl': '1.5rem' },
   shadows: {
-    sm: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
-    md: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
-    lg: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
-    xl: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
-    glow: '0 0 20px rgb(14 165 233 / 0.3)',
+    sm: '0 1px 2px 0 rgb(0 0 0 / 0.25)',
+    md: '0 2px 8px -2px rgb(0 0 0 / 0.35)',
+    lg: '0 8px 24px -8px rgb(0 0 0 / 0.45)',
+    xl: '0 16px 40px -12px rgb(0 0 0 / 0.55)',
+    glow: '0 0 0 1px rgba(209, 168, 69, 0.4), 0 0 18px rgba(209, 168, 69, 0.18)',
   },
   typography: {
-    fontFamily: '"Inter", "Segoe UI", system-ui, sans-serif',
-    fontSize: { xs: '0.75rem', sm: '0.875rem', base: '1rem', lg: '1.125rem', xl: '1.25rem', '2xl': '1.5rem', '3xl': '1.875rem', '4xl': '2.25rem' },
+    fontFamily: '"DM Sans", "Segoe UI", system-ui, sans-serif',
+    fontFamilyDisplay: '"Fraunces", Georgia, serif',
+    fontSize: { xs: '0.75rem', sm: '0.875rem', base: '1rem', lg: '1.125rem', xl: '1.25rem', '2xl': '1.5rem', '3xl': '1.875rem', '4xl': '2.75rem' },
     fontWeight: { normal: '400', medium: '500', semibold: '600', bold: '700' },
     lineHeight: { tight: '1.25', normal: '1.5', relaxed: '1.75' },
   },
@@ -193,26 +193,26 @@ const Btn = ({
   const [hovered, setHovered] = useState(false);
   const base: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    fontFamily: theme.typography.fontFamily, fontWeight: theme.typography.fontWeight.medium,
-    borderRadius: theme.borderRadius.lg, border: 'none', outline: 'none',
-    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
-    transition: 'all 0.18s ease-out', pointerEvents: disabled ? 'none' : 'auto',
-    transform: hovered && !disabled ? 'translateY(-2px) scale(1.03)' : 'translateY(0) scale(1)',
-    filter: hovered && !disabled ? 'brightness(1.15)' : 'none',
+    fontFamily: theme.typography.fontFamily, fontWeight: theme.typography.fontWeight.semibold,
+    borderRadius: theme.borderRadius.lg, border: '1px solid transparent', outline: 'none',
+    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
+    transition: 'background 0.15s ease, border-color 0.15s ease, color 0.15s ease',
+    pointerEvents: disabled ? 'none' : 'auto',
+    lineHeight: 1.2, letterSpacing: '0.01em', whiteSpace: 'nowrap',
   };
   const sizes = {
-    sm: { padding: `${theme.spacing.sm} ${theme.spacing.md}`, fontSize: theme.typography.fontSize.sm },
-    md: { padding: `${theme.spacing.md} ${theme.spacing.xl}`, fontSize: theme.typography.fontSize.base },
-    lg: { padding: `${theme.spacing.lg} ${theme.spacing['2xl']}`, fontSize: theme.typography.fontSize.lg },
+    sm: { padding: `${theme.spacing.sm} ${theme.spacing.md}`, fontSize: theme.typography.fontSize.sm, minHeight: 34 },
+    md: { padding: `${theme.spacing.md} ${theme.spacing.xl}`, fontSize: theme.typography.fontSize.base, minHeight: 42 },
+    lg: { padding: `${theme.spacing.lg} ${theme.spacing['2xl']}`, fontSize: theme.typography.fontSize.lg, minHeight: 48 },
   };
   const variants: Record<string, React.CSSProperties> = {
-    primary: { background: `linear-gradient(135deg, ${theme.colors.primary[500]}, ${theme.colors.primary[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(14,165,233,0.45)' : theme.shadows.md },
-    secondary: { background: `linear-gradient(135deg, ${theme.colors.secondary[500]}, ${theme.colors.secondary[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(139,92,246,0.45)' : theme.shadows.md },
-    outline: { background: 'transparent', color: theme.colors.dark[100], border: `1px solid ${theme.colors.dark[600]}` },
-    ghost: { background: 'transparent', color: theme.colors.dark[300] },
-    success: { background: `linear-gradient(135deg, ${theme.colors.success[500]}, ${theme.colors.success[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(16,185,129,0.45)' : theme.shadows.md },
-    warning: { background: `linear-gradient(135deg, ${theme.colors.warning[500]}, ${theme.colors.warning[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(245,158,11,0.45)' : theme.shadows.md },
-    error: { background: `linear-gradient(135deg, ${theme.colors.error[500]}, ${theme.colors.error[600]})`, color: 'white', boxShadow: hovered ? '0 8px 25px rgba(239,68,68,0.45)' : theme.shadows.md },
+    primary: { background: hovered ? theme.colors.primary[400] : theme.colors.primary[500], color: '#1d1607', boxShadow: theme.shadows.sm },
+    secondary: { background: hovered ? theme.colors.secondary[500] : theme.colors.secondary[600], color: '#0e141d', boxShadow: theme.shadows.sm },
+    outline: { background: hovered ? 'rgba(245, 244, 236, 0.07)' : 'transparent', color: theme.colors.dark[100], border: `1px solid ${hovered ? theme.colors.dark[500] : theme.colors.dark[600]}` },
+    ghost: { background: hovered ? 'rgba(245, 244, 236, 0.06)' : 'transparent', color: hovered ? theme.colors.dark[200] : theme.colors.dark[300] },
+    success: { background: hovered ? theme.colors.success[500] : theme.colors.success[600], color: '#f5f4ec', boxShadow: theme.shadows.sm },
+    warning: { background: hovered ? theme.colors.warning[400] : theme.colors.warning[500], color: '#241303', boxShadow: theme.shadows.sm },
+    error: { background: hovered ? theme.colors.error[400] : theme.colors.error[500], color: '#f5f4ec', boxShadow: theme.shadows.sm },
   };
   return (
     <button
@@ -229,13 +229,46 @@ const Btn = ({
 
 const Panel = ({ children, style: s = {}, ...props }: { children: React.ReactNode; style?: React.CSSProperties; [k: string]: any }) => (
   <div style={{
-    background: `linear-gradient(145deg, ${theme.colors.dark[800]}, ${theme.colors.dark[900]})`,
+    background: theme.colors.dark[800],
     borderRadius: theme.borderRadius.xl, border: `1px solid ${theme.colors.dark[700]}`,
     boxShadow: theme.shadows.lg, ...s,
   }} {...props}>
     {children}
   </div>
 );
+
+// ---- Toasts (replaces window.alert for non-blocking errors/notices) ----
+
+let pushToast: (msg: string) => void = () => {};
+function notify(msg: string) { pushToast(msg); }
+
+function Toasts() {
+  const [toasts, setToasts] = useState<Array<{ id: number; msg: string }>>([]);
+  useEffect(() => {
+    pushToast = (msg: string) => {
+      const id = Date.now() + Math.random();
+      setToasts((t) => [...t.slice(-3), { id, msg }]);
+      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+    };
+    return () => { pushToast = () => {}; };
+  }, []);
+  if (toasts.length === 0) return null;
+  return (
+    <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 500, display: 'grid', gap: 8, width: 'min(92vw, 420px)' }}>
+      {toasts.map((t) => (
+        <div key={t.id} className="toast-in" role="status" style={{
+          background: theme.colors.dark[700], color: theme.colors.dark[100],
+          border: `1px solid ${theme.colors.dark[600]}`, borderLeft: `3px solid ${theme.colors.primary[500]}`,
+          borderRadius: theme.borderRadius.lg, padding: '10px 14px',
+          fontSize: theme.typography.fontSize.sm, fontFamily: theme.typography.fontFamily,
+          boxShadow: theme.shadows.lg, textAlign: 'center',
+        }}>
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ---- Card rendering ----
 
@@ -247,13 +280,12 @@ function CardView({ card, size = 'md', hover = true }: { card: CardT; size?: 'sm
   const isFace = ['J', 'Q', 'K'].includes(card.rank);
   return (
     <div style={{
-      border: `2px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.xl,
-      width, height, background: 'linear-gradient(145deg,#fff,#f8fafc)',
-      position: 'relative', fontFamily: '"Georgia",serif', color: isRed ? '#dc2626' : '#1f2937',
-      boxShadow: theme.shadows.lg, overflow: 'hidden', cursor: hover ? 'pointer' : 'default',
-      transition: 'all 0.3s ease-in-out', flexShrink: 0,
+      border: '1px solid #c9c3b2', borderRadius: theme.borderRadius.lg,
+      width, height, background: '#fdfcf6',
+      position: 'relative', fontFamily: '"Georgia",serif', color: isRed ? '#b8372a' : '#26261f',
+      boxShadow: theme.shadows.md, overflow: 'hidden', cursor: hover ? 'pointer' : 'default',
+      flexShrink: 0,
     }}>
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'radial-gradient(circle at 30% 20%,rgba(255,255,255,0.8) 0%,transparent 50%)', pointerEvents: 'none' }} />
       <div style={{ position: 'absolute', top: 6, left: 6, fontSize: fs + 2, fontWeight: 'bold', lineHeight: 1 }}>
         <div>{card.rank}</div>
         <div style={{ fontSize: fs }}>{suits[card.suit]}</div>
@@ -265,7 +297,7 @@ function CardView({ card, size = 'md', hover = true }: { card: CardT; size?: 'sm
       <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center' }}>
         {isFace ? (
           <div style={{ fontSize: fs + 8, fontWeight: 'bold', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-            <div style={{ fontSize: fs + 4, padding: '2px 6px', background: isRed ? '#fee2e2' : '#f1f5f9', borderRadius: theme.borderRadius.sm, border: `1px solid ${isRed ? '#fca5a5' : '#cbd5e1'}` }}>{card.rank}</div>
+            <div style={{ fontSize: fs + 4, padding: '2px 6px', background: isRed ? '#f8e8e4' : '#efeee6', borderRadius: theme.borderRadius.sm, border: `1px solid ${isRed ? '#dcaaa0' : '#c9c3b2'}` }}>{card.rank}</div>
             <div style={{ fontSize: fs + 12 }}>{suits[card.suit]}</div>
           </div>
         ) : (
@@ -281,13 +313,14 @@ function CardBack({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
   const { width, height } = sizes[size];
   return (
     <div style={{
-      border: `2px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.xl,
-      width, height, background: `linear-gradient(135deg,${theme.colors.primary[900]},${theme.colors.secondary[900]})`,
-      boxShadow: theme.shadows.lg, position: 'relative', overflow: 'hidden', flexShrink: 0,
+      border: '1px solid #2e4636', borderRadius: theme.borderRadius.lg,
+      width, height, background: '#1c3526',
+      boxShadow: theme.shadows.md, position: 'relative', overflow: 'hidden', flexShrink: 0,
     }}>
-      <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(45deg,rgba(255,255,255,0.1) 0px,rgba(255,255,255,0.1) 2px,transparent 2px,transparent 8px),repeating-linear-gradient(-45deg,rgba(255,255,255,0.05) 0px,rgba(255,255,255,0.05) 2px,transparent 2px,transparent 8px)' }} />
-      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '60%', height: '60%', border: '1px solid rgba(255,255,255,0.3)', borderRadius: theme.borderRadius.lg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: width * 0.2, color: 'rgba(255,255,255,0.7)', fontWeight: 'bold' }}>
-        ♠♥♦♣
+      <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(45deg, rgba(209,168,69,0.07) 0px, rgba(209,168,69,0.07) 1px, transparent 1px, transparent 7px), repeating-linear-gradient(-45deg, rgba(209,168,69,0.05) 0px, rgba(209,168,69,0.05) 1px, transparent 1px, transparent 7px)' }} />
+      <div style={{ position: 'absolute', inset: 5, border: '1px solid rgba(209,168,69,0.3)', borderRadius: 6 }} />
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', fontSize: width * 0.3, color: 'rgba(209,168,69,0.55)', fontFamily: '"Georgia",serif', lineHeight: 1 }}>
+        ♠
       </div>
     </div>
   );
@@ -363,38 +396,13 @@ function CaboSlotView({ card, selectable, selected, snapTarget, onSelect, cardSi
 
 // ---- Ambient / effects ----
 
-function FloatingCards() {
-  const items = useMemo(() => Array.from({ length: 14 }, (_, i) => ({
-    id: i,
-    suit: ['♠', '♥', '♦', '♣'][i % 4],
-    x: 5 + (i * 7) % 90,
-    size: 24 + (i * 13) % 36,
-    duration: 18 + (i * 3.7) % 18,
-    delay: -(i * 4.1) % 30,
-    isRed: i % 4 >= 2,
-  })), []);
-  return (
-    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0, overflow: 'hidden' }}>
-      {items.map((item) => (
-        <div key={item.id} style={{
-          position: 'absolute', left: `${item.x}%`, bottom: '-10%',
-          fontSize: item.size,
-          color: item.isRed ? 'rgba(220,38,38,0.13)' : 'rgba(255,255,255,0.07)',
-          animation: `floatUpDrift ${item.duration}s ${item.delay}s linear infinite`,
-          userSelect: 'none',
-        }}>{item.suit}</div>
-      ))}
-    </div>
-  );
-}
-
 function Confetti() {
   const pieces = useMemo(() => Array.from({ length: 65 }, (_, i) => ({
     id: i,
     x: (i * 1.57) % 100,
     delay: (i * 0.047) % 2,
     duration: 2.5 + (i * 0.07) % 2,
-    color: ['#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#06b6d4','#f97316'][i % 7],
+    color: ['#d1a845', '#66a06e', '#f5f4ec', '#cf5a42', '#7490b5', '#e7cc8a', '#d97f33'][i % 7],
     size: 7 + (i * 0.3) % 8,
     circle: i % 3 !== 0,
   })), []);
@@ -452,19 +460,19 @@ function RoundScoreModal({
       {isEnd && <Confetti />}
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
         <Panel style={{ padding: theme.spacing['3xl'], maxWidth: 640, width: '95%', maxHeight: '90vh', overflowY: 'auto' }} className="fade-in">
-          <h2 style={{ margin: '0 0 1rem', color: theme.colors.dark[100], fontSize: theme.typography.fontSize['2xl'] }}>
-            {isEnd ? '🏆 Game Over!' : `Round ${game.currentRound} Complete`}
+          <h2 style={{ margin: '0 0 1rem', fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], fontSize: theme.typography.fontSize['2xl'] }}>
+            {isEnd ? 'Game over' : `Round ${game.currentRound} complete`}
           </h2>
           {isEnd && winners && winners.length > 0 && (
-            <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: `${theme.colors.success[600]}33`, border: `1px solid ${theme.colors.success[500]}`, borderRadius: theme.borderRadius.lg }}>
-              <span style={{ color: theme.colors.success[500], fontWeight: 700 }}>
+            <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: 'rgba(209, 168, 69, 0.12)', border: `1px solid ${theme.colors.primary[700]}`, borderRadius: theme.borderRadius.lg }}>
+              <span style={{ color: theme.colors.primary[400], fontWeight: 700 }}>
                 {winners.length === 1 ? `Winner: ${winners[0].displayName}` : `Co-winners: ${winners.map((w) => w.displayName).join(', ')}`}
               </span>
               <span style={{ color: theme.colors.dark[300], marginLeft: 8 }}>({winners[0].score} pts)</span>
             </div>
           )}
           <div style={{ overflowX: 'auto', marginBottom: theme.spacing['2xl'] }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200] }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200], fontVariantNumeric: 'tabular-nums' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${theme.colors.dark[600]}` }}>
                   <th style={{ textAlign: 'left', padding: '6px 8px', color: theme.colors.dark[400] }}>Player</th>
@@ -480,10 +488,10 @@ function RoundScoreModal({
                   const total = game.runningTotals?.[p.playerId] ?? 0;
                   const isLowest = isEnd && game.leaderboard?.find((l) => l.playerId === p.playerId)?.rank === 1;
                   return (
-                    <tr key={p.playerId} style={{ borderBottom: `1px solid ${theme.colors.dark[700]}`, background: isLowest ? `${theme.colors.success[600]}22` : 'transparent' }}>
+                    <tr key={p.playerId} style={{ borderBottom: `1px solid ${theme.colors.dark[700]}`, background: isLowest ? 'rgba(209, 168, 69, 0.08)' : 'transparent' }}>
                       <td style={{ padding: '6px 8px', color: p.playerId === playerId ? theme.colors.primary[400] : theme.colors.dark[200] }}>
                         {p.displayName}{p.playerId === playerId ? ' (you)' : ''}
-                        {isLowest && <span style={{ marginLeft: 6, color: theme.colors.success[500] }}>★</span>}
+                        {isLowest && <span style={{ marginLeft: 6, color: theme.colors.primary[400] }}>★</span>}
                       </td>
                       {Array.from({ length: roundCount }, (_, i) => (
                         <td key={i} style={{ textAlign: 'center', padding: '6px 8px' }}>{rs?.scores[i] ?? '–'}</td>
@@ -569,19 +577,19 @@ function CaboScoreModal({
       {isEnd && <Confetti />}
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
         <Panel style={{ padding: theme.spacing['3xl'], maxWidth: 640, width: '95%', maxHeight: '90vh', overflowY: 'auto' }} className="fade-in">
-          <h2 style={{ margin: '0 0 1rem', color: theme.colors.dark[100], fontSize: theme.typography.fontSize['2xl'] }}>
-            {isEnd ? '🏆 Game Over!' : `Round ${game.currentRound} Complete`}
+          <h2 style={{ margin: '0 0 1rem', fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], fontSize: theme.typography.fontSize['2xl'] }}>
+            {isEnd ? 'Game over' : `Round ${game.currentRound} complete`}
           </h2>
           {isEnd && winners && winners.length > 0 && (
-            <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: `${theme.colors.success[600]}33`, border: `1px solid ${theme.colors.success[500]}`, borderRadius: theme.borderRadius.lg }}>
-              <span style={{ color: theme.colors.success[500], fontWeight: 700 }}>
+            <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: 'rgba(209, 168, 69, 0.12)', border: `1px solid ${theme.colors.primary[700]}`, borderRadius: theme.borderRadius.lg }}>
+              <span style={{ color: theme.colors.primary[400], fontWeight: 700 }}>
                 {winners.length === 1 ? `Winner: ${winners[0].displayName}` : `Co-winners: ${winners.map((w) => w.displayName).join(', ')}`}
               </span>
               <span style={{ color: theme.colors.dark[300], marginLeft: 8 }}>({winners[0].score} pts cumulative)</span>
             </div>
           )}
           <div style={{ overflowX: 'auto', marginBottom: theme.spacing['2xl'] }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200] }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200], fontVariantNumeric: 'tabular-nums' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${theme.colors.dark[600]}` }}>
                   <th style={{ textAlign: 'left', padding: '6px 8px', color: theme.colors.dark[400] }}>Player</th>
@@ -597,10 +605,10 @@ function CaboScoreModal({
                   const cumulative = game.caboCumulativeScores?.[p.playerId] ?? 0;
                   const isWinner = isEnd && game.caboLeaderboard?.find((l) => l.playerId === p.playerId)?.rank === 1;
                   return (
-                    <tr key={p.playerId} style={{ borderBottom: `1px solid ${theme.colors.dark[700]}`, background: isWinner ? `${theme.colors.success[600]}22` : 'transparent' }}>
+                    <tr key={p.playerId} style={{ borderBottom: `1px solid ${theme.colors.dark[700]}`, background: isWinner ? 'rgba(209, 168, 69, 0.08)' : 'transparent' }}>
                       <td style={{ padding: '6px 8px', color: p.playerId === playerId ? theme.colors.primary[400] : theme.colors.dark[200] }}>
                         {p.displayName}{p.playerId === playerId ? ' (you)' : ''}
-                        {isWinner && <span style={{ marginLeft: 6, color: theme.colors.success[500] }}>★</span>}
+                        {isWinner && <span style={{ marginLeft: 6, color: theme.colors.primary[400] }}>★</span>}
                       </td>
                       {Array.from({ length: roundCount }, (_, i) => (
                         <td key={i} style={{ textAlign: 'center', padding: '6px 8px' }}>{rs?.scores[i] ?? '–'}</td>
@@ -681,14 +689,17 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <span style={{ fontWeight: 700, color: theme.colors.dark[100] }}>Round {game.currentRound} / {game.targetRounds}</span>
-          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code: <strong style={{ color: theme.colors.dark[200] }}>{game.code}</strong></span>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
+          <span style={{ fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, fontSize: theme.typography.fontSize.xl, color: theme.colors.dark[50] }}>Round {game.currentRound} <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base }}>of {game.targetRounds}</span></span>
+          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code <strong style={{ color: theme.colors.dark[200], letterSpacing: '0.1em' }}>{game.code}</strong></span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span className={deckShaking ? 'deck-shake' : ''} style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm, display: 'inline-block' }}>🂠 {game.extraDeckCount}</span>
+          <span className={deckShaking ? 'deck-shake' : ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>
+            <span aria-hidden="true" style={{ width: 14, height: 20, borderRadius: 3, background: '#1c3526', border: '1px solid rgba(209,168,69,0.4)', display: 'inline-block' }} />
+            {game.extraDeckCount} in deck
+          </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard:</span>
+            <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard</span>
             {game.discardTop ? <CardView card={game.discardTop} size="sm" /> : <span style={{ color: theme.colors.dark[500] }}>—</span>}
           </div>
         </div>
@@ -707,7 +718,7 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
               <div key={s.slotId}>{s.peekOnly ? <CardView card={s.card} /> : <CardBack />}</div>
             ))}
           </div>
-          <Btn disabled={peekAcked} onClick={() => { setPeekAcked(true); emit('golf:ackPeek', {}, (r: any) => { if (r?.error) { setPeekAcked(false); alert(r.error); } }); }}>
+          <Btn disabled={peekAcked} onClick={() => { setPeekAcked(true); emit('golf:ackPeek', {}, (r: any) => { if (r?.error) { setPeekAcked(false); notify(r.error); } }); }}>
             {peekAcked ? 'Waiting for others…' : 'Got it — hide cards'}
           </Btn>
         </Panel>
@@ -730,12 +741,12 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
               <div key={h.playerId} style={{ opacity: disconnected ? 0.7 : 1, padding: isTurn ? 12 : 0, borderRadius: isTurn ? theme.borderRadius.xl : 0, border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent', boxShadow: isTurn && isMe ? theme.shadows.glow : 'none', transition: 'all 0.3s ease-in-out' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <span style={{ fontWeight: 600, color: isMe ? theme.colors.primary[400] : theme.colors.dark[200] }}>{player?.displayName}{isMe ? ' (you)' : ''}</span>
-                  {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, background: theme.colors.primary[600], color: 'white', padding: '2px 8px', borderRadius: theme.borderRadius.lg }}>Turn</span>}
-                  {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, background: theme.colors.warning[600], color: 'white', padding: '2px 8px', borderRadius: theme.borderRadius.lg }}>Waiting…</span>}
+                  {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.bold, background: theme.colors.primary[500], color: '#1d1607', padding: '2px 10px', borderRadius: 999 }}>Turn</span>}
+                  {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, background: theme.colors.warning[600], color: '#f5f4ec', padding: '2px 10px', borderRadius: 999 }}>Waiting…</span>}
                   {disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}><span style={{ display: 'inline-block', width: 10, height: 10, border: `2px solid ${theme.colors.dark[500]}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: 4 }} />disconnected</span>}
                   {running !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{running} pts</span>}
                   {isHost && !isMe && disconnected && !graceElapsed && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>kick in {kickSecondsLeft}s</span>}
-                  {isHost && !isMe && disconnected && graceElapsed && <Btn size="sm" variant="error" onClick={() => emit('golf:kickPlayer', { playerId: h.playerId }, (r: any) => { if (r?.error) alert(r.error); })}>Kick</Btn>}
+                  {isHost && !isMe && disconnected && graceElapsed && <Btn size="sm" variant="error" onClick={() => emit('golf:kickPlayer', { playerId: h.playerId }, (r: any) => { if (r?.error) notify(r.error); })}>Kick</Btn>}
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, auto)`, gap: cardGap, width: 'fit-content' }}>
@@ -757,16 +768,16 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             {!pendingDraw && (
               <>
-                <Btn onClick={() => { if (!selectedSlotId) return alert('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return alert(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
-                <Btn variant="outline" onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return alert(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
+                <Btn onClick={() => { if (!selectedSlotId) return notify('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
+                <Btn variant="outline" onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
               </>
             )}
             {pendingDraw && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ color: theme.colors.dark[300] }}>Drawn:</span>
                 <CardView card={pendingDraw} />
-                <Btn variant="success" onClick={() => { if (!selectedSlotId) return alert('Select a slot to swap'); emit('golf:acceptDrawAndSwap', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return alert(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Accept & swap</Btn>
-                <Btn variant="warning" onClick={() => { if (!selectedSlotId) return alert('Select a slot to reveal'); emit('golf:rejectDrawAndReveal', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return alert(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Reject & reveal</Btn>
+                <Btn variant="success" onClick={() => { if (!selectedSlotId) return notify('Select a slot to swap'); emit('golf:acceptDrawAndSwap', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Accept & swap</Btn>
+                <Btn variant="warning" onClick={() => { if (!selectedSlotId) return notify('Select a slot to reveal'); emit('golf:rejectDrawAndReveal', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Reject & reveal</Btn>
               </div>
             )}
           </div>
@@ -884,7 +895,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     if (targetType === 'opponent') payload.targetPlayerId = targetPid;
     emit('cabo:snap', payload, (r: any) => {
       if (r?.error && r.error !== 'Wrong rank — 2 penalty cards drawn') {
-        alert(r.error);
+        notify(r.error);
       }
       setSnapMode(false);
     });
@@ -895,7 +906,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
     if (specialMode === 'peek-own') {
       emit('cabo:useSpecialPower', { action: 'peek-own', ownSlotId: slotId }, (r: any) => {
-        if (r?.error) return alert(r.error);
+        if (r?.error) return notify(r.error);
         setSpecialMode('none');
         setSelectedOwnSlot(null);
       });
@@ -908,7 +919,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     }
     if (specialMode === 'black-king-decide' && blackKingSeen) {
       emit('cabo:blackKingDecide', { swap: true, ownSlotId: slotId }, (r: any) => {
-        if (r?.error) return alert(r.error);
+        if (r?.error) return notify(r.error);
         setBlackKingSeen(null);
         setSpecialMode('none');
         setSelectedOwnSlot(null);
@@ -919,7 +930,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     // place drawn card
     if (hasPendingDraw && isMyTurn && !hasBlackKingPending) {
       emit('cabo:placeDrawn', { slotId }, (r: any) => {
-        if (r?.error) return alert(r.error);
+        if (r?.error) return notify(r.error);
         setPendingDraw(null);
         setSelectedOwnSlot(null);
       });
@@ -940,7 +951,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
     if (specialMode === 'spy') {
       emit('cabo:useSpecialPower', { action: 'spy', targetPlayerId: targetPid, targetSlotId: slotId }, (r: any) => {
-        if (r?.error) return alert(r.error);
+        if (r?.error) return notify(r.error);
         setSpecialMode('none');
         setSelectedOpponentSlot(null);
       });
@@ -949,7 +960,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     if (specialMode === 'blind-swap-opponent') {
       if (!selectedOwnSlot) { setSpecialMode('blind-swap-own'); return; }
       emit('cabo:useSpecialPower', { action: 'blind-swap', ownSlotId: selectedOwnSlot, targetPlayerId: targetPid, targetSlotId: slotId }, (r: any) => {
-        if (r?.error) return alert(r.error);
+        if (r?.error) return notify(r.error);
         setSpecialMode('none');
         setSelectedOwnSlot(null);
         setSelectedOpponentSlot(null);
@@ -958,7 +969,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     }
     if (specialMode === 'black-king-see') {
       emit('cabo:useSpecialPower', { action: 'black-king-see', targetPlayerId: targetPid, targetSlotId: slotId }, (r: any) => {
-        if (r?.error) return alert(r.error);
+        if (r?.error) return notify(r.error);
         setSpecialMode('none');
         setSelectedOpponentSlot(null);
       });
@@ -973,14 +984,17 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     <div style={{ display: 'grid', gap: 16 }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <span style={{ fontWeight: 700, color: theme.colors.dark[100] }}>Cabo · Round {game.currentRound}</span>
-          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code: <strong style={{ color: theme.colors.dark[200] }}>{game.code}</strong></span>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'baseline' }}>
+          <span style={{ fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, fontSize: theme.typography.fontSize.xl, color: theme.colors.dark[50] }}>Cabo <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base }}>· round {game.currentRound}</span></span>
+          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code <strong style={{ color: theme.colors.dark[200], letterSpacing: '0.1em' }}>{game.code}</strong></span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span className={deckShaking ? 'deck-shake' : ''} style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm, display: 'inline-block' }}>🂠 {game.extraDeckCount}</span>
+          <span className={deckShaking ? 'deck-shake' : ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>
+            <span aria-hidden="true" style={{ width: 14, height: 20, borderRadius: 3, background: '#1c3526', border: '1px solid rgba(209,168,69,0.4)', display: 'inline-block' }} />
+            {game.extraDeckCount} in deck
+          </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard:</span>
+            <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard</span>
             {game.discardTop ? <CardView card={game.discardTop} size="sm" /> : <span style={{ color: theme.colors.dark[500] }}>—</span>}
           </div>
           {game.discardTop && (phase === 'play' || phase === 'cabo-called') && (
@@ -1017,7 +1031,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
               <div key={s.slotId}>{idx >= 2 ? <CardView card={s.card} /> : <CardBack />}</div>
             ))}
           </div>
-          <Btn disabled={peekAcked} onClick={() => { setPeekAcked(true); emit('cabo:ackPeek', {}, (r: any) => { if (r?.error) { setPeekAcked(false); alert(r.error); } }); }}>
+          <Btn disabled={peekAcked} onClick={() => { setPeekAcked(true); emit('cabo:ackPeek', {}, (r: any) => { if (r?.error) { setPeekAcked(false); notify(r.error); } }); }}>
             {peekAcked ? 'Waiting for others…' : 'Got it — hide cards'}
           </Btn>
         </Panel>
@@ -1061,7 +1075,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
               <span style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>Click one of your cards to swap, or pass</span>
               <Btn variant="outline" onClick={() => {
                 emit('cabo:blackKingDecide', { swap: false }, (r: any) => {
-                  if (r?.error) return alert(r.error);
+                  if (r?.error) return notify(r.error);
                   setBlackKingSeen(null);
                   setSpecialMode('none');
                 });
@@ -1081,7 +1095,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
             <div style={{ display: 'flex', gap: 8 }}>
               <Btn variant="success" onClick={() => {
                 emit('cabo:snapSlide', { ownSlotId: snapSlideSlot }, (r: any) => {
-                  if (r?.error) return alert(r.error);
+                  if (r?.error) return notify(r.error);
                   setSnapGap(null);
                   setSnapSlideSlot(null);
                 });
@@ -1136,8 +1150,8 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                   <span style={{ fontWeight: 600, color: isMe ? theme.colors.primary[400] : theme.colors.dark[200] }}>
                     {player?.displayName}{isMe ? ' (you)' : ''}
                   </span>
-                  {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, background: theme.colors.primary[600], color: 'white', padding: '2px 8px', borderRadius: theme.borderRadius.lg }}>Turn</span>}
-                  {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, background: theme.colors.warning[600], color: 'white', padding: '2px 8px', borderRadius: theme.borderRadius.lg }}>Waiting…</span>}
+                  {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.bold, background: theme.colors.primary[500], color: '#1d1607', padding: '2px 10px', borderRadius: 999 }}>Turn</span>}
+                  {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, background: theme.colors.warning[600], color: '#f5f4ec', padding: '2px 10px', borderRadius: 999 }}>Waiting…</span>}
                   {disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}><span style={{ display: 'inline-block', width: 10, height: 10, border: `2px solid ${theme.colors.dark[500]}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: 4 }} />disconnected</span>}
                   {cumulative !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{cumulative} pts</span>}
                   {hasPendingDrawIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.primary[400] }}>deciding…</span>}
@@ -1221,16 +1235,16 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                 setDeckShaking(true);
                 setTimeout(() => setDeckShaking(false), 500);
                 emit('cabo:draw', {}, (r: any) => {
-                  if (r?.error) return alert(r.error);
+                  if (r?.error) return notify(r.error);
                   setPendingDraw(r.card);
                 });
               }}>Draw from deck</Btn>
               <Btn variant="outline" disabled={!game.discardTop} onClick={() => {
                 const slots = mySlots;
-                if (!slots || slots.length === 0) return alert('No slots to swap into');
+                if (!slots || slots.length === 0) return notify('No slots to swap into');
                 const slotId = selectedOwnSlot ?? slots[0].slotId;
                 emit('cabo:takeDiscard', { slotId }, (r: any) => {
-                  if (r?.error) return alert(r.error);
+                  if (r?.error) return notify(r.error);
                   setSelectedOwnSlot(null);
                 });
               }}>
@@ -1239,7 +1253,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
               {phase === 'play' && (
                 <Btn variant="warning" onClick={() => {
                   if (!window.confirm('Call Cabo? All other players get one more turn.')) return;
-                  emit('cabo:callCabo', {}, (r: any) => { if (r?.error) alert(r.error); });
+                  emit('cabo:callCabo', {}, (r: any) => { if (r?.error) notify(r.error); });
                 }}>Call Cabo</Btn>
               )}
             </div>
@@ -1267,7 +1281,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                   )}
                   <Btn variant="outline" size="sm" onClick={() => {
                     emit('cabo:discardDrawn', {}, (r: any) => {
-                      if (r?.error) return alert(r.error);
+                      if (r?.error) return notify(r.error);
                       setPendingDraw(null);
                     });
                   }}>Discard without use</Btn>
@@ -1381,7 +1395,7 @@ export function App() {
       gameMode,
     };
     socket.emit('createGame', { displayName, config }, (res: any) => {
-      if (res?.error) return alert(res.error);
+      if (res?.error) return notify(res.error);
       setPlayerId(res.playerId);
       setPlayerToken(res.playerToken);
       setCode(res.code);
@@ -1393,7 +1407,7 @@ export function App() {
   function joinGame() {
     if (!socket) return;
     socket.emit('joinGame', { code: code.trim(), displayName }, (res: any) => {
-      if (res?.error) return alert(res.error);
+      if (res?.error) return notify(res.error);
       setPlayerId(res.playerId);
       setPlayerToken(res.playerToken);
       setCode(res.code);
@@ -1404,7 +1418,7 @@ export function App() {
 
   function startGame() {
     socket?.emit('startGame', {}, (res: any) => {
-      if (res?.error) return alert(res.error);
+      if (res?.error) return notify(res.error);
       setView('table');
     });
   }
@@ -1417,18 +1431,18 @@ export function App() {
 
   function ackNextRound() {
     const event = isCabo ? 'cabo:ackNextRound' : 'golf:ackNextRound';
-    socket?.emit(event, {}, (res: any) => { if (res?.error) alert(res.error); });
+    socket?.emit(event, {}, (res: any) => { if (res?.error) notify(res.error); });
   }
 
   function ackRematch() {
     const event = isCabo ? 'cabo:ackRematch' : 'golf:ackRematch';
-    socket?.emit(event, {}, (res: any) => { if (res?.error) alert(res.error); });
+    socket?.emit(event, {}, (res: any) => { if (res?.error) notify(res.error); });
   }
 
   function leaveGame() {
     const event = isCabo ? 'cabo:leaveGame' : 'golf:leaveGame';
     socket?.emit(event, {}, (res: any) => {
-      if (res?.error) return alert(res.error);
+      if (res?.error) return notify(res.error);
       clearSession();
       setGame(null); setPlayerId(null); setPlayerToken(null); setCode('');
       setMyGolfSlots(null); setPendingDraw(null); setSelectedSlotId(null);
@@ -1438,43 +1452,42 @@ export function App() {
   }
 
   function updateConfig(cpp: number) {
-    socket?.emit('golf:updateConfig', { cardsPerPlayer: cpp }, (res: any) => { if (res?.error) alert(res.error); });
+    socket?.emit('golf:updateConfig', { cardsPerPlayer: cpp }, (res: any) => { if (res?.error) notify(res.error); });
   }
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: theme.spacing.lg,
-    background: theme.colors.dark[800], border: `1px solid ${theme.colors.dark[600]}`,
+    background: theme.colors.dark[900], border: `1px solid ${theme.colors.dark[600]}`,
     borderRadius: theme.borderRadius.lg, color: theme.colors.dark[100],
     fontSize: theme.typography.fontSize.base, fontFamily: theme.typography.fontFamily,
-    outline: 'none', transition: 'all 0.2s ease-in-out', boxSizing: 'border-box',
+    outline: 'none', transition: 'border-color 0.15s ease, box-shadow 0.15s ease', boxSizing: 'border-box',
   };
 
   const labelStyle: React.CSSProperties = {
-    display: 'block', fontSize: theme.typography.fontSize.sm, fontWeight: theme.typography.fontWeight.medium,
-    color: theme.colors.dark[300], marginBottom: theme.spacing.sm,
-    textTransform: 'uppercase', letterSpacing: '0.05em',
+    display: 'block', fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold,
+    color: theme.colors.dark[400], marginBottom: theme.spacing.sm,
+    textTransform: 'uppercase', letterSpacing: '0.08em',
   };
 
   return (
     <div style={{
       minHeight: '100vh',
       background: `
-        repeating-linear-gradient(45deg,  rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 7px),
-        repeating-linear-gradient(-45deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 7px),
-        radial-gradient(ellipse at 30% 30%, #1e5c2e 0%, #0f3d1f 50%, #071a0e 100%)
+        repeating-linear-gradient(45deg,  rgba(245,244,236,0.008) 0px, rgba(245,244,236,0.008) 1px, transparent 1px, transparent 6px),
+        radial-gradient(ellipse 120% 90% at 50% 0%, #16291c 0%, #0c1710 55%, #070d09 100%)
       `,
       fontFamily: theme.typography.fontFamily, color: theme.colors.dark[100],
       padding: isMobile ? theme.spacing.lg : theme.spacing['3xl'], position: 'relative',
     }}>
-      <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%)', zIndex: 0, pointerEvents: 'none' }} />
-      <FloatingCards />
+      <Toasts />
 
       {/* Landing */}
       {view === 'landing' && (
         <div className="view-enter" style={{ maxWidth: 400, margin: '0 auto', paddingTop: theme.spacing['5xl'], position: 'relative', zIndex: 1 }}>
-          <div style={{ textAlign: 'center', marginBottom: theme.spacing['5xl'] }}>
-            <h1 style={{ fontSize: theme.typography.fontSize['4xl'], fontWeight: theme.typography.fontWeight.bold, background: `linear-gradient(135deg,${theme.colors.primary[400]},${theme.colors.secondary[400]})`, backgroundClip: 'text', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: theme.spacing.md, letterSpacing: '-0.02em' }}>Card Games</h1>
-            <p style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.lg, fontWeight: theme.typography.fontWeight.bold, letterSpacing: '0.06em' }}>MULTIPLAYER</p>
+          <div style={{ textAlign: 'center', marginBottom: theme.spacing['4xl'] }}>
+            <div aria-hidden="true" style={{ color: theme.colors.primary[500], fontSize: theme.typography.fontSize.lg, letterSpacing: '0.5em', marginBottom: theme.spacing.md, paddingLeft: '0.5em' }}>♠ ♥ ♦ ♣</div>
+            <h1 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['4xl'], fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], margin: `0 0 ${theme.spacing.md}`, letterSpacing: '-0.01em', lineHeight: theme.typography.lineHeight.tight }}>Card Games</h1>
+            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf · Cabo · Classic — play with friends</p>
           </div>
           <Panel style={{ padding: theme.spacing['3xl'], marginBottom: theme.spacing['2xl'] }}>
             <div style={{ marginBottom: theme.spacing['2xl'] }}>
@@ -1496,7 +1509,7 @@ export function App() {
       {view === 'create' && (
         <div className="view-enter" style={{ maxWidth: 500, margin: '0 auto', paddingTop: theme.spacing['3xl'], position: 'relative', zIndex: 1 }}>
           <div style={{ marginBottom: theme.spacing['3xl'], textAlign: 'center' }}>
-            <h2 style={{ fontSize: theme.typography.fontSize['3xl'], fontWeight: theme.typography.fontWeight.bold, color: theme.colors.dark[100], marginBottom: theme.spacing.md }}>Create Game</h2>
+            <h2 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['3xl'], fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], margin: 0 }}>Create a game</h2>
           </div>
           <Panel style={{ padding: theme.spacing['3xl'] }}>
             <div style={{ display: 'grid', gap: theme.spacing['2xl'] }}>
@@ -1518,8 +1531,8 @@ export function App() {
                   {gameMode === 'golf' ? (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: theme.spacing.md }}>
                       {[4, 6, 8].map((n) => (
-                        <button key={n} onClick={() => setCardsPerPlayer(n)}
-                          style={{ padding: theme.spacing.lg, background: cardsPerPlayer === n ? `linear-gradient(135deg,${theme.colors.primary[500]},${theme.colors.primary[600]})` : theme.colors.dark[800], border: `1px solid ${cardsPerPlayer === n ? theme.colors.primary[500] : theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[100], fontWeight: theme.typography.fontWeight.medium, cursor: 'pointer', transition: 'all 0.2s' }}>
+                        <button key={n} onClick={() => setCardsPerPlayer(n)} aria-pressed={cardsPerPlayer === n}
+                          style={{ padding: theme.spacing.lg, background: cardsPerPlayer === n ? theme.colors.primary[500] : theme.colors.dark[900], border: `1px solid ${cardsPerPlayer === n ? theme.colors.primary[500] : theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: cardsPerPlayer === n ? '#1d1607' : theme.colors.dark[200], fontWeight: theme.typography.fontWeight.semibold, fontSize: theme.typography.fontSize.base, fontFamily: theme.typography.fontFamily, cursor: 'pointer', transition: 'all 0.15s ease' }}>
                           {n}
                         </button>
                       ))}
@@ -1547,7 +1560,7 @@ export function App() {
       {view === 'join' && (
         <div className="view-enter" style={{ maxWidth: 400, margin: '0 auto', paddingTop: theme.spacing['3xl'], position: 'relative', zIndex: 1 }}>
           <div style={{ marginBottom: theme.spacing['3xl'], textAlign: 'center' }}>
-            <h2 style={{ fontSize: theme.typography.fontSize['3xl'], fontWeight: theme.typography.fontWeight.bold, color: theme.colors.dark[100], marginBottom: theme.spacing.md }}>Join Game</h2>
+            <h2 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['3xl'], fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], margin: 0 }}>Join a game</h2>
           </div>
           <Panel style={{ padding: theme.spacing['3xl'] }}>
             <div style={{ marginBottom: theme.spacing['2xl'] }}>
@@ -1567,65 +1580,78 @@ export function App() {
 
       {/* Lobby */}
       {view === 'lobby' && game && (
-        <div className="view-enter" style={{ maxWidth: 480, margin: '0 auto', display: 'grid', gap: 16, position: 'relative', zIndex: 1 }}>
-          <h2 style={{ margin: 0, color: theme.colors.dark[100] }}>Lobby</h2>
+        <div className="view-enter" style={{ maxWidth: 480, margin: '0 auto', display: 'grid', gap: 16, position: 'relative', zIndex: 1, paddingTop: theme.spacing['2xl'] }}>
+          <h2 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['2xl'], fontWeight: theme.typography.fontWeight.semibold, margin: 0, color: theme.colors.dark[50], textAlign: 'center' }}>Waiting for players</h2>
+          <Panel style={{ padding: theme.spacing['2xl'], textAlign: 'center' }}>
+            <div style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[400], textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: theme.spacing.sm }}>Share this code</div>
+            <div style={{ fontSize: '2.5rem', fontFamily: '"DM Sans", monospace', fontWeight: theme.typography.fontWeight.bold, color: theme.colors.primary[400], letterSpacing: '0.25em', marginBottom: theme.spacing.md, paddingLeft: '0.25em', fontVariantNumeric: 'tabular-nums' }}>{game.code}</div>
+            <Btn variant="outline" size="sm" onClick={() => {
+              navigator.clipboard?.writeText(game.code).then(() => notify('Code copied'));
+            }}>Copy code</Btn>
+            <div style={{ marginTop: theme.spacing.lg, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>
+              {game.config.gameMode === 'golf' ? `Golf · ${game.config.cardsPerPlayer} cards per player` : game.config.gameMode === 'cabo' ? 'Cabo · 4 cards · first past 100 loses' : 'Classic'}
+            </div>
+          </Panel>
           <Panel style={{ padding: theme.spacing['2xl'] }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: theme.spacing.lg }}>
-              <span style={{ color: theme.colors.dark[400] }}>Code</span>
-              <strong style={{ color: theme.colors.primary[400], fontFamily: 'monospace', letterSpacing: '0.2em' }}>{game.code}</strong>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: theme.spacing.lg }}>
-              <span style={{ color: theme.colors.dark[400] }}>Mode</span>
-              <span style={{ color: theme.colors.dark[200] }}>
-                {game.config.gameMode === 'golf' ? `Golf (${game.config.cardsPerPlayer} cards)` : game.config.gameMode === 'cabo' ? 'Cabo (4 cards, first to 100+)' : 'Classic'}
-              </span>
-            </div>
-            <div style={{ marginBottom: theme.spacing.lg }}>
-              <div style={{ color: theme.colors.dark[400], marginBottom: theme.spacing.sm }}>Players ({game.players.length}/{game.config.maxPlayers})</div>
-              <div style={{ display: 'grid', gap: theme.spacing.sm }}>
-                {game.players.map((p) => (
-                  <div key={p.playerId} style={{ display: 'flex', justifyContent: 'space-between', padding: `${theme.spacing.sm} ${theme.spacing.md}`, background: theme.colors.dark[800], borderRadius: theme.borderRadius.lg }}>
-                    <span style={{ color: p.playerId === playerId ? theme.colors.primary[400] : theme.colors.dark[200] }}>{p.displayName}</span>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      {p.playerId === game.hostId && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.warning[500] }}>Host</span>}
-                      {!p.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>disconnected</span>}
-                    </div>
+            <div style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[400], textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: theme.spacing.md }}>Players ({game.players.length}/{game.config.maxPlayers})</div>
+            <div style={{ display: 'grid', gap: theme.spacing.sm }}>
+              {game.players.map((p) => (
+                <div key={p.playerId} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.md, padding: `${theme.spacing.sm} ${theme.spacing.md}`, background: theme.colors.dark[900], border: `1px solid ${theme.colors.dark[700]}`, borderRadius: theme.borderRadius.lg }}>
+                  <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: p.playerId === playerId ? theme.colors.primary[500] : theme.colors.dark[600], color: p.playerId === playerId ? '#1d1607' : theme.colors.dark[100], display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: theme.typography.fontSize.sm, fontWeight: theme.typography.fontWeight.bold, flexShrink: 0 }}>
+                    {(p.displayName || '?').trim().charAt(0).toUpperCase()}
+                  </span>
+                  <span style={{ color: p.playerId === playerId ? theme.colors.primary[300] : theme.colors.dark[100], fontWeight: theme.typography.fontWeight.medium, flex: 1, textAlign: 'left' }}>
+                    {p.displayName}{p.playerId === playerId ? ' (you)' : ''}
+                  </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {p.playerId === game.hostId && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.primary[400], border: `1px solid ${theme.colors.primary[700]}`, borderRadius: 999, padding: '2px 10px' }}>Host</span>}
+                    {!p.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>disconnected</span>}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
-            <div style={{ display: 'flex', gap: theme.spacing.lg }}>
-              {isHost && <Btn onClick={startGame} disabled={(game.players?.length || 0) < 2}>Start Game</Btn>}
-              <Btn variant="outline" onClick={() => setView('table')}>Go to Table</Btn>
+            <div style={{ display: 'flex', gap: theme.spacing.lg, marginTop: theme.spacing['2xl'] }}>
+              {isHost && <Btn onClick={startGame} disabled={(game.players?.length || 0) < 2} style={{ flex: 1 }}>Start game</Btn>}
+              <Btn variant="outline" onClick={() => setView('table')} style={isHost ? {} : { flex: 1 }}>Go to table</Btn>
             </div>
+            {isHost && (game.players?.length || 0) < 2 && (
+              <p style={{ margin: `${theme.spacing.md} 0 0`, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[500], textAlign: 'center' }}>You need at least 2 players to start</p>
+            )}
           </Panel>
         </div>
       )}
 
       {/* Classic table */}
       {view === 'table' && game && !isGolf && !isCabo && (
-        <div style={{ display: 'grid', gap: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <div>Code: <strong>{game.code}</strong></div>
-            <div>Extra deck: {game.extraDeckCount}</div>
-          </div>
-          <div>
-            Center pile:
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: 8, border: `1px solid ${theme.colors.dark[600]}`, minHeight: 64 }}>
-              {game.centerPile.slice(-10).map((c) => <CardView key={c.cardId} card={c} />)}
+        <div className="view-enter" style={{ display: 'grid', gap: 16, position: 'relative', zIndex: 1, maxWidth: 900, margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+            <span style={{ fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, fontSize: theme.typography.fontSize.xl, color: theme.colors.dark[50] }}>Classic</span>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+              <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code <strong style={{ color: theme.colors.dark[200], letterSpacing: '0.1em' }}>{game.code}</strong></span>
+              <span style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>{game.extraDeckCount} in deck</span>
             </div>
           </div>
-          <div>
-            My hand:
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: 8 }}>
+          <Panel style={{ padding: theme.spacing['2xl'] }}>
+            <div style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[400], textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: theme.spacing.md }}>Center pile</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', minHeight: 110, alignItems: 'center' }}>
+              {game.centerPile.length === 0 && <span style={{ color: theme.colors.dark[500], fontSize: theme.typography.fontSize.sm }}>No cards played yet</span>}
+              {game.centerPile.slice(-10).map((c) => <CardView key={c.cardId} card={c} />)}
+            </div>
+          </Panel>
+          <Panel style={{ padding: theme.spacing['2xl'] }}>
+            <div style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[400], textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: theme.spacing.md }}>Your hand — click a card to play it</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {hand.length === 0 && <span style={{ color: theme.colors.dark[500], fontSize: theme.typography.fontSize.sm }}>No cards in hand</span>}
               {hand.map((c) => (
-                <button key={c.cardId} onClick={() => socket?.emit('playCard', { cardId: c.cardId }, (r: any) => { if (r?.error) alert(r.error); })} style={{ padding: 0, border: 'none', background: 'none' }}>
+                <button key={c.cardId} aria-label={`Play ${c.rank} of ${c.suit}`} onClick={() => socket?.emit('playCard', { cardId: c.cardId }, (r: any) => { if (r?.error) notify(r.error); })} style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', borderRadius: theme.borderRadius.lg }}>
                   <CardView card={c} />
                 </button>
               ))}
             </div>
-          </div>
-          <button onClick={() => socket?.emit('drawCard', {}, (r: any) => { if (r?.error) alert(r.error); })} disabled={game.extraDeckCount <= 0}>Draw</button>
+            <div style={{ marginTop: theme.spacing.lg }}>
+              <Btn onClick={() => socket?.emit('drawCard', {}, (r: any) => { if (r?.error) notify(r.error); })} disabled={game.extraDeckCount <= 0}>Draw a card</Btn>
+            </div>
+          </Panel>
         </div>
       )}
 
@@ -1665,10 +1691,10 @@ export function App() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
           <Panel style={{ padding: theme.spacing['3xl'], maxWidth: 560, width: '90%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h2 style={{ margin: 0, color: theme.colors.dark[100] }}>Leaderboard</h2>
-              <Btn variant="ghost" size="sm" onClick={() => setShowLeaderboard(false)}>✕</Btn>
+              <h2 style={{ margin: 0, fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50] }}>Leaderboard</h2>
+              <Btn variant="ghost" size="sm" aria-label="Close leaderboard" onClick={() => setShowLeaderboard(false)}>✕</Btn>
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200] }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200], fontVariantNumeric: 'tabular-nums' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${theme.colors.dark[600]}` }}>
                   <th style={{ textAlign: 'left', padding: '6px 8px', color: theme.colors.dark[400] }}>#</th>
