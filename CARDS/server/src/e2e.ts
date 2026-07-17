@@ -13,11 +13,15 @@ async function run() {
 	let gameId = '';
 	let code = '';
 
+	// Sockets start connecting at construction; check .connected so an
+	// already-finished handshake doesn't leave the listener waiting forever.
 	await new Promise<void>((resolve, reject) => {
+		if (a.connected) return resolve();
 		const timeout = setTimeout(() => reject(new Error('A did not connect')), 5000);
 		a.on('connect', () => { clearTimeout(timeout); resolve(); });
 	});
 	await new Promise<void>((resolve, reject) => {
+		if (b.connected) return resolve();
 		const timeout = setTimeout(() => reject(new Error('B did not connect')), 5000);
 		b.on('connect', () => { clearTimeout(timeout); resolve(); });
 	});

@@ -646,7 +646,7 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <span className={deckShaking ? 'deck-shake' : ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>
             <span aria-hidden="true" style={{ width: 14, height: 20, borderRadius: 3, background: '#1c3526', border: '1px solid rgba(209,168,69,0.4)', display: 'inline-block' }} />
-            {game.extraDeckCount} in deck
+            {game.extraDeckCount > 0 ? `${game.extraDeckCount} in deck` : game.discardTop ? 'deck empty — reshuffles discard' : 'no cards left'}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard</span>
@@ -719,7 +719,7 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
             {!pendingDraw && (
               <>
                 <Btn onClick={() => { if (!selectedSlotId) return notify('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
-                <Btn variant="outline" onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
+                <Btn variant="outline" disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
               </>
             )}
             {pendingDraw && (
@@ -813,6 +813,15 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
       socket.off('cabo:snapGapAvailable', onSnapGapAvailable);
     };
   }, [socket, setSnapGap]);
+
+  // 1s tick while anyone is disconnected so the kick countdown re-renders.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const hasDisconnected = game.players.some((p) => !p.connected && p.disconnectedAt);
+    if (!hasDisconnected) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [game.players]);
 
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth < 640;
@@ -942,7 +951,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span className={deckShaking ? 'deck-shake' : ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>
             <span aria-hidden="true" style={{ width: 14, height: 20, borderRadius: 3, background: '#1c3526', border: '1px solid rgba(209,168,69,0.4)', display: 'inline-block' }} />
-            {game.extraDeckCount} in deck
+            {game.extraDeckCount > 0 ? `${game.extraDeckCount} in deck` : game.discardTop ? 'deck empty — reshuffles discard' : 'no cards left'}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Discard</span>
@@ -1079,6 +1088,10 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
             const disconnected = player && !player.connected;
             const hasPendingDrawIndicator = cabo.pendingDrawPlayers?.includes(h.playerId);
             const hasBlackKingIndicator = cabo.blackKingPlayers?.includes(h.playerId);
+            const disconnectedAt = player?.disconnectedAt;
+            const graceElapsed = disconnectedAt && Date.now() - disconnectedAt >= 30_000;
+            const kickSecondsLeft = disconnectedAt && !graceElapsed ? Math.max(0, 30 - Math.floor((Date.now() - disconnectedAt) / 1000)) : 0;
+            const isHost = playerId === game.hostId;
 
             // my slots from private event
 
@@ -1107,6 +1120,8 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                   {hasPendingDrawIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.primary[400] }}>deciding…</span>}
                   {hasBlackKingIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.secondary[400] }}>black king…</span>}
                   {h.playerId === caboCallerId && <span style={{ fontSize: theme.typography.fontSize.xs, background: `${theme.colors.warning[600]}44`, color: theme.colors.warning[400], padding: '2px 8px', borderRadius: theme.borderRadius.lg, border: `1px solid ${theme.colors.warning[600]}` }}>Called Cabo</span>}
+                  {isHost && !isMe && disconnected && !graceElapsed && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>kick in {kickSecondsLeft}s</span>}
+                  {isHost && !isMe && disconnected && graceElapsed && <Btn size="sm" variant="error" onClick={() => emit('cabo:kickPlayer', { playerId: h.playerId }, (r: any) => { if (r?.error) notify(r.error); })}>Kick</Btn>}
                 </div>
 
                 {/* card grid (variable width) */}
@@ -1183,7 +1198,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
           {!hasPendingDraw && !hasBlackKingPending && (
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Btn onClick={() => {
+              <Btn disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => {
                 setDeckShaking(true);
                 setTimeout(() => setDeckShaking(false), 500);
                 emit('cabo:draw', {}, (r: any) => {

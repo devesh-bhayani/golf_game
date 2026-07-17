@@ -1222,7 +1222,9 @@ io.on('connection', (socket) => {
     ack({ ok: true });
   });
 
-  socket.on('golf:leaveGame', (_: {}, ack: (res: any) => void) => {
+  // Shared by golf:leaveGame and cabo:leaveGame (identical semantics; two
+  // event names kept for wire compat with deployed clients).
+  function handleLeaveGame(ack: (res: any) => void) {
     const state = getState();
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
     if (state.phase !== 'waiting' && state.phase !== 'rematch-pending') {
@@ -1249,7 +1251,9 @@ io.on('connection', (socket) => {
 
     if (games.has(state.gameId)) broadcastSnapshot(io, state);
     ack({ ok: true });
-  });
+  }
+
+  socket.on('golf:leaveGame', (_: {}, ack: (res: any) => void) => handleLeaveGame(ack));
 
   socket.on('golf:updateConfig', (payload: { cardsPerPlayer: number }, ack: (res: any) => void) => {
     const state = getState();
@@ -1711,32 +1715,65 @@ io.on('connection', (socket) => {
     ack({ ok: true });
   });
 
-  socket.on('cabo:leaveGame', (_: {}, ack: (res: any) => void) => {
+  socket.on('cabo:leaveGame', (_: {}, ack: (res: any) => void) => handleLeaveGame(ack));
+
+  socket.on('cabo:kickPlayer', (payload: { playerId: string }, ack: (res: any) => void) => {
     const state = getState();
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
-    if (state.phase !== 'waiting' && state.phase !== 'rematch-pending') {
-      return ack({ error: 'Cannot leave mid-game; disconnect to stop playing' });
-    }
-    const player = state.players.get(currentPlayerId);
-    if (!player) return ack({ error: 'Player not found' });
-
-    state.players.delete(currentPlayerId);
-    tokenIndex.delete(player.playerToken);
-
-    if (state.hostId === currentPlayerId) {
-      const next = Array.from(state.players.keys())[0];
-      if (next) state.hostId = next;
-    }
-    if (state.players.size === 0) {
-      codeToGameId.delete(state.code);
-      games.delete(state.gameId);
+    if (state.config.gameMode !== 'cabo' || !state.caboHands) return ack({ error: 'Not a Cabo game' });
+    if (state.hostId !== currentPlayerId) return ack({ error: 'Only host can kick' });
+    const target = state.players.get(payload.playerId);
+    if (!target) return ack({ error: 'Player not found' });
+    if (target.connected) return ack({ error: 'Player is connected' });
+    if (!target.disconnectedAt || Date.now() - target.disconnectedAt < 30_000) {
+      return ack({ error: 'Grace period not elapsed' });
     }
 
-    socket.leave(state.gameId);
-    currentGameId = null;
-    currentPlayerId = null;
+    // Return an unresolved drawn card to the discard so it isn't lost.
+    const pending = state.caboPendingDraw?.get(target.playerId);
+    if (pending && state.discardPile) state.discardPile.push(pending);
+    state.caboPendingDraw?.delete(target.playerId);
+    state.caboBlackKingPending?.delete(target.playerId);
+    state.caboSnapGapPending?.delete(target.playerId);
 
-    if (games.has(state.gameId)) broadcastSnapshot(io, state);
+    // Remove their hand (not scored this round) and their turn-order slot so
+    // play never stalls waiting on them.
+    state.caboHands.delete(target.playerId);
+    if (state.caboTurnOrder) {
+      const idx = state.caboTurnOrder.indexOf(target.playerId);
+      if (idx !== -1) {
+        const wasTheirTurn = idx === (state.caboCurrentTurnIndex ?? 0);
+        state.caboTurnOrder.splice(idx, 1);
+        const n = state.caboTurnOrder.length;
+        if (n > 0) {
+          let cur = state.caboCurrentTurnIndex ?? 0;
+          if (idx < cur) cur -= 1;
+          if (cur >= n) cur = 0;
+          // After the splice, cur already points at the next player when it was
+          // the kicked player's turn.
+          state.caboCurrentTurnIndex = cur;
+        }
+        if (wasTheirTurn && state.phase === 'cabo-called') {
+          // Their forfeited final turn still counts against the countdown.
+          // ponytail: if the new current player is the caller this hands them a
+          // dead turn; rare enough (kick mid-final-turns) to accept for now.
+          const remaining = (state.caboFinalTurnsLeft ?? 0) - 1;
+          state.caboFinalTurnsLeft = Math.max(0, remaining);
+          if (remaining <= 0) {
+            finalizeCaboRound(io, state);
+            broadcastSnapshot(io, state);
+            return ack({ ok: true });
+          }
+        }
+      }
+    }
+
+    // Never block ack-gated phases on them again.
+    state.caboPeekAckByPlayer?.add(target.playerId);
+    state.betweenRoundAckByPlayer.add(target.playerId);
+    state.rematchAckByPlayer.add(target.playerId);
+
+    broadcastSnapshot(io, state);
     ack({ ok: true });
   });
 

@@ -88,21 +88,27 @@ Ordered by severity. Each entry: what, where, why it matters, and a fix scoped t
 **Why**: Every change forces reading/searching a huge file; merge conflicts guaranteed with parallel work. But both files are internally well-sectioned with `// ----` banners, and one-file-per-side is a stated design choice (PROJECT.md).
 **Fix (small, only when friction is real)**: First split = extract `CaboTable`+`CaboSlotView` to `ui/CaboTable.tsx` and `GolfTable`+`SlotView` to `ui/GolfTable.tsx` (they're already prop-isolated). Server: extract pure helpers (scoring, dealing, sanitizing) to `logic.ts`; leave socket handlers in place. Do not do this speculatively.
 
-## 11. Draw-pile exhaustion edge cases — LOW
+## 11. Draw-pile exhaustion edge cases — LOW — **FIXED (client UX)**
+
+> **Status: fixed.** Deck chip now reads "deck empty — reshuffles discard" (or "no cards left") at 0; both Draw buttons disable only in the truly-dead case (`extraDeckCount === 0 && !discardTop`). Server penalty-skip behavior unchanged (harmless).
 
 **What**: (a) `reshuffleDrawPile` no-ops when the discard has ≤1 card, so with both piles empty `golf:draw`/`cabo:draw` ack `'No cards left'` — the player must know to swap-with-discard instead; nothing in the UI explains this. (b) Wrong-snap penalty draws (`cabo:snap`) silently skip penalty cards when the deck+discard are exhausted. (c) `.scratch/finish-implementation.md` already tracks "empty draw pile visual" as an open item.
 **Where**: `index.ts` `reshuffleDrawPile`, `golf:draw`, `cabo:draw`, `cabo:snap` penalty loop.
 **Why**: Near-impossible with correct deck sizing (`decksNeeded` guarantees 12-card headroom), reachable in long Cabo rounds with many snaps.
 **Fix (small)**: In the client, when `extraDeckCount === 0`, disable the Draw button and show "deck empty — take the discard". Server behavior is fine.
 
-## 12. Kick exists only for Golf — LOW (inconsistency)
+## 12. Kick exists only for Golf — LOW (inconsistency) — **FIXED**
+
+> **Status: fixed.** `cabo:kickPlayer` added (same host/grace checks): returns any pending draw to the discard, removes the hand (unscored) and the turn-order slot so play never stalls, decrements the final-turns countdown if it was their turn during cabo-called, auto-acks all phases. Client shows the same countdown + Kick button as Golf. Verified live: grace enforced, hand removed, turn passes, game unstalled. Kick also fixes a latent stall: normal-phase cabo turn advance never skipped disconnected players.
 
 **What**: `golf:kickPlayer` lets the host remove a >30s-disconnected player; Cabo has no equivalent. A Cabo game with a permanently-gone player limps along on auto-ack/auto-skip but their hand still scores each round.
 **Where**: `index.ts` `golf:kickPlayer`; nothing under Cabo actions.
 **Why**: Asymmetric UX; hosts will look for the kick button in Cabo and not find it.
 **Fix (small)**: Clone the handler as `cabo:kickPlayer`: same grace-period checks; on kick, delete the player's `caboHands` entry and their turn-order slot, auto-ack them everywhere, `caboEndTurn` if it was their turn. Wire the same host-side button in `CaboTable`.
 
-## 13. `golf:leaveGame` and `cabo:leaveGame` are copy-paste identical — LOW
+## 13. `golf:leaveGame` and `cabo:leaveGame` are copy-paste identical — LOW — **FIXED**
+
+> **Status: fixed.** One `handleLeaveGame` function; both event names alias it (wire compat with deployed clients).
 
 **What**: Two verbatim handlers (lobby/rematch-only leave, host transfer, empty-game cleanup); the client picks by mode.
 **Where**: `index.ts` both handlers; `App.tsx` `leaveGame()`.
