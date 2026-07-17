@@ -38,6 +38,11 @@ async function run() {
 	if (joinRes?.error) throw new Error('joinGame failed: ' + joinRes.error);
 	console.log('B joined');
 
+	// Register the hand listener BEFORE starting: the server emits hand:update
+	// to B before A's startGame ack resolves, so registering after is a race.
+	let handB: any[] = [];
+	b.on('hand:update', (cards) => { handB = cards; });
+
 	// Start game from A
 	const startRes: any = await new Promise((resolve) => {
 		a.emit('startGame', {}, resolve);
@@ -45,8 +50,6 @@ async function run() {
 	if (startRes?.error) throw new Error('startGame failed: ' + startRes.error);
 	console.log('Game started');
 
-	let handB: any[] = [];
-	b.on('hand:update', (cards) => { handB = cards; });
 	await delay(500);
 	if (!handB.length) throw new Error('B did not receive hand');
 
