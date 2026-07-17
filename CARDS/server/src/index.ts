@@ -4,16 +4,9 @@ import cors from 'cors';
 import { Server } from 'socket.io';
 import { customAlphabet } from 'nanoid';
 
-type Suit = 'spades' | 'hearts' | 'diamonds' | 'clubs';
-type Rank = 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
-
-type Card = {
-  cardId: string;
-  suit: Suit;
-  rank: Rank;
-  color: 'red' | 'black';
-  value: number;
-};
+// Wire types live in shared-types.ts (single source of truth with the client).
+// Type-only import: erased at compile time, so dist/ has no runtime dependency.
+import type { Suit, Rank, Card, GameMode, GamePhase, GameConfig } from './shared-types';
 
 type Player = {
   playerId: string;
@@ -22,25 +15,6 @@ type Player = {
   displayName: string;
   connected: boolean;
   disconnectedAt?: number;
-};
-
-type GameMode = 'classic' | 'golf' | 'cabo';
-
-type GamePhase =
-  | 'waiting'
-  | 'peek'
-  | 'play'
-  | 'cabo-called'
-  | 'between-rounds'
-  | 'ended'
-  | 'rematch-pending';
-
-type GameConfig = {
-  maxPlayers: number;
-  totalCardsPerDeck: number;
-  numberOfDecks: number;
-  cardsPerPlayer: number;
-  gameMode?: GameMode;
 };
 
 type GolfSlot = {
@@ -1132,6 +1106,11 @@ io.on('connection', (socket) => {
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
     if (!state.golfHands || !state.discardPile) return ack({ error: 'Not a golf game' });
     if (state.phase !== 'play') return ack({ error: 'Cannot act in this phase' });
+    // Explicit turn check: a pendingDraw normally implies it's your turn, but
+    // golf:kickPlayer can advance the turn past a player still holding one.
+    if (state.turnOrder && state.turnOrder[state.currentTurnIndex || 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
     const card = state.pendingDrawByPlayer.get(currentPlayerId);
     if (!card) return ack({ error: 'No pending card' });
     const slots = state.golfHands.get(currentPlayerId)!;
@@ -1156,6 +1135,10 @@ io.on('connection', (socket) => {
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
     if (!state.golfHands || !state.discardPile) return ack({ error: 'Not a golf game' });
     if (state.phase !== 'play') return ack({ error: 'Cannot act in this phase' });
+    // Explicit turn check: see golf:acceptDrawAndSwap.
+    if (state.turnOrder && state.turnOrder[state.currentTurnIndex || 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
     const card = state.pendingDrawByPlayer.get(currentPlayerId);
     if (!card) return ack({ error: 'No pending card' });
 
@@ -1327,6 +1310,9 @@ io.on('connection', (socket) => {
     if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
     if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
 
+    // Turn-gated implicitly: only the turn player can hold a caboPendingDraw
+    // (cabo:draw is turn-checked and the turn doesn't advance until resolved).
+    // Never add another way to acquire a pendingDraw without revisiting this.
     const drawn = state.caboPendingDraw?.get(currentPlayerId);
     if (!drawn) return ack({ error: 'No pending draw' });
 
@@ -1377,6 +1363,7 @@ io.on('connection', (socket) => {
     if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
     if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
 
+    // Turn-gated implicitly via pendingDraw — see cabo:placeDrawn.
     const drawn = state.caboPendingDraw?.get(currentPlayerId);
     if (!drawn) return ack({ error: 'No pending draw' });
 
@@ -1632,7 +1619,9 @@ io.on('connection', (socket) => {
       }
       emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
       broadcastSnapshot(io, state);
-      return ack({ ok: false, error: 'Wrong rank — 2 penalty cards drawn' });
+      // `code` is the machine-readable contract; the client matches it (not the
+      // human string, which is free to change).
+      return ack({ ok: false, code: 'WRONG_SNAP', error: 'Wrong rank — 2 penalty cards drawn' });
     }
 
     // Correct snap: remove card from target's hand

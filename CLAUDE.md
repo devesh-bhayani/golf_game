@@ -56,9 +56,9 @@ Keep it that way. Don't split files or add dependencies without being asked.
 - **Tests fail with connect timeouts, not messages, when the server isn't running.** Start the server first. `e2e:cabo:specials` needs the *server* started with `TEST_HOOKS=1`, not the test process.
 - **New server test file? Add it to `CARDS/server/tsconfig.json` `exclude`** or the production build compiles it and can break.
 - **`typescript` and `@types/*` are in server `dependencies` on purpose** (build runs on prod hosts). Don't move them to devDependencies.
-- **Types are duplicated client/server by hand** (`Card`↔`CardT`, snapshot shape). Adding a snapshot field = edit both files.
-- **The client string-matches one server error verbatim**: `'Wrong rank — 2 penalty cards drawn'` (cabo snap). Don't reword one side only.
-- **Turn checks on follow-up actions are implicit**: accept/reject/place/power handlers rely on "only the turn player can hold a pendingDraw". Don't create any other way to acquire a pendingDraw.
+- **Wire types live in `CARDS/server/src/shared-types.ts`**, imported type-only by both sides. New snapshot field = edit that one file (+ the snapshot builder). Keep the import type-only or the client bundles server code.
+- **Wrong-snap is signaled by `code: 'WRONG_SNAP'`** in the cabo:snap ack; the client matches the code. Add `code` fields for any new expected-failure acks instead of string-matching.
+- **Cabo follow-up actions are turn-gated implicitly**: place/discard/power handlers rely on "only the turn player can hold a caboPendingDraw" (commented in the handlers). Golf accept/reject check the turn explicitly (kick can advance past a pendingDraw holder). Don't create any other way to acquire a pendingDraw.
 - **`currentTurnIndex` starts at 1**, not 0 — the second player acts first, per the rules. Not a bug.
 - **`cardsPerPlayer` is mode-dependent**: golf ∈ {4,6,8}, cabo = always 4, classic 1–13.
 - **`config.numberOfDecks` from the client is ignored** — recomputed by `decksNeeded()` at deal time. Preserve that invariant in any dealer change.

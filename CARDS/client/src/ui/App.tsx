@@ -109,59 +109,9 @@ const theme = {
   },
 };
 
-type GamePhase = 'waiting' | 'peek' | 'play' | 'cabo-called' | 'between-rounds' | 'ended' | 'rematch-pending';
-
-type CardT = {
-  cardId: string;
-  suit: 'spades' | 'hearts' | 'diamonds' | 'clubs';
-  rank: 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
-  color: 'red' | 'black';
-  value: number;
-};
-
-type GolfSlotT = { slotId: string; revealed: boolean; locked: boolean; card: CardT | null };
-type CaboSlotPrivate = { slotId: string; card: CardT };
-
-type GameSnapshot = {
-  gameId: string;
-  code: string;
-  hostId: string;
-  status: 'waiting' | 'active' | 'ended';
-  phase: GamePhase;
-  config: { maxPlayers: number; totalCardsPerDeck: number; numberOfDecks: number; cardsPerPlayer: number; gameMode?: 'classic' | 'golf' | 'cabo' };
-  players: { playerId: string; displayName: string; connected: boolean; disconnectedAt?: number }[];
-  centerPile: CardT[];
-  extraDeckCount: number;
-  currentRound: number;
-  targetRounds: number;
-  discardTop?: CardT | null;
-  golf?: {
-    hands: { playerId: string; slots: GolfSlotT[] }[];
-    turn: string | null;
-    round: number;
-    peekPhaseActive?: boolean;
-    peekAcks?: string[];
-  };
-  roundScores?: { playerId: string; scores: number[] }[];
-  runningTotals?: Record<string, number>;
-  betweenRoundAcks?: string[];
-  rematchAcks?: string[];
-  leaderboard?: Array<{ rank: number; displayName: string; score: number; playerId: string }>;
-  cabo?: {
-    hands: { playerId: string; slots: { slotId: string }[] }[];
-    turn: string | null;
-    round: number;
-    peekPhaseActive: boolean;
-    peekAcks: string[];
-    caboCallerId: string | null;
-    caboFinalTurnsLeft: number;
-    pendingDrawPlayers: string[];
-    blackKingPlayers: string[];
-  };
-  caboRoundScores?: { playerId: string; scores: number[] }[];
-  caboCumulativeScores?: Record<string, number>;
-  caboLeaderboard?: Array<{ rank: number; displayName: string; score: number; playerId: string }>;
-};
+// Wire types come from the server's shared-types.ts — the single source of
+// truth for the socket contract. Type-only import: nothing bundled at runtime.
+import type { Card as CardT, GamePhase, GolfSlotT, CaboSlotPrivate, GameSnapshot } from '../../../server/src/shared-types';
 
 // ---- Responsive hook ----
 
@@ -894,7 +844,8 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
     const payload: any = { targetType, targetSlotId: slotId };
     if (targetType === 'opponent') payload.targetPlayerId = targetPid;
     emit('cabo:snap', payload, (r: any) => {
-      if (r?.error && r.error !== 'Wrong rank — 2 penalty cards drawn') {
+      // WRONG_SNAP is expected gameplay (penalty cards appear in hand) — no error toast.
+      if (r?.error && r.code !== 'WRONG_SNAP') {
         notify(r.error);
       }
       setSnapMode(false);

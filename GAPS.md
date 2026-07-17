@@ -47,21 +47,27 @@ Ordered by severity. Each entry: what, where, why it matters, and a fix scoped t
 **Why**: Regressions land silently; a new contributor won't know the server must already be running (the failure is a connect timeout, not a helpful error).
 **Fix (small)**: Add `.github/workflows/test.yml`: install, start server with `TEST_HOOKS=1 &`, wait on `/health`, run the test scripts sequentially, exit nonzero on failure. Also add a "Running tests" section to `CARDS/README.md` (three lines).
 
-## 6. Client/server types are duplicated by hand — MEDIUM
+## 6. Client/server types are duplicated by hand — MEDIUM — **FIXED**
+
+> **Status: fixed.** Wire types (Card, GamePhase, GameConfig, GolfSlotT, CaboSlotPrivate, GameSnapshot) live in `CARDS/server/src/shared-types.ts`; both sides use type-only imports (erased at compile — no build or runtime changes). Server-internal types (GameState, non-null GolfSlot) stay in index.ts.
 
 **What**: `Card`/`CardT`, `GameSnapshot`, phase unions, config shape all exist twice, maintained by eye. Socket payloads on the client are `any` almost everywhere.
 **Where**: `CARDS/server/src/index.ts` (types at top) vs `CARDS/client/src/ui/App.tsx` (types at top).
 **Why**: A renamed or added snapshot field compiles fine on both sides and fails at runtime.
 **Fix (small)**: Create `CARDS/shared/types.ts` exporting the wire types (Card, GamePhase, GameConfig, snapshot shape); import from both tsconfigs via relative path. Move types only — no behavior. Verify both `tsc` builds after.
 
-## 7. Turn checks on follow-up actions are implicit — MEDIUM (fragile convention)
+## 7. Turn checks on follow-up actions are implicit — MEDIUM (fragile convention) — **FIXED**
+
+> **Status: fixed.** Golf accept/reject now check the turn explicitly (closes a real hole: `golf:kickPlayer` could advance the turn past a player holding a pendingDraw). Cabo handlers carry a comment documenting the implicit pendingDraw guard (kick doesn't exist there, so the invariant holds).
 
 **What**: `golf:acceptDrawAndSwap`, `golf:rejectDrawAndReveal`, `cabo:placeDrawn`, `cabo:discardDrawn`, `cabo:useSpecialPower`, `cabo:blackKingDecide` never check whose turn it is. They're guarded only by "you have a pendingDraw entry", which only the turn player can acquire (draw is turn-checked).
 **Where**: the listed handlers in `index.ts`.
 **Why**: Correct today, but the invariant lives in nobody's head. Any future code path that grants a pendingDraw outside a turn (a new power, a refactor of snap penalties) silently breaks turn integrity.
 **Fix (small)**: Add one comment at each handler's pendingDraw check: `// turn-gated implicitly: only the turn player can hold a pendingDraw`. Optionally add the explicit turn check to the two golf handlers (cheap, no behavior change in legal play).
 
-## 8. Client matches a server error string verbatim — MEDIUM
+## 8. Client matches a server error string verbatim — MEDIUM — **FIXED**
+
+> **Status: fixed.** Wrong-snap ack now carries `code: 'WRONG_SNAP'`; the client matches the code, not the string. The human-readable message is free to change.
 
 **What**: Wrong-snap is signaled as `ack({ ok: false, error: 'Wrong rank — 2 penalty cards drawn' })` and the client suppresses its error toast by comparing that exact string.
 **Where**: `index.ts` `cabo:snap`; `App.tsx` `handleSnapSlot`.
