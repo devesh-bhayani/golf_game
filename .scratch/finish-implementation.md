@@ -1,5 +1,9 @@
 # Plan: Finish GOLF implementation
 
+> Note: this flat file predates the tracker convention in
+> `docs/agents/issue-tracker.md` (`.scratch/<feature-slug>/PRD.md` + `issues/`).
+> Left as-is deliberately — new work should follow the convention.
+
 ## Bugs fixed (done)
 - [x] Disconnect during between-rounds → advance → no snapshot rebroadcast (server stuck)
 - [x] Round header showed "Round 0 Complete" instead of "Round 1 Complete"

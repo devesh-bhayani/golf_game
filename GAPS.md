@@ -115,7 +115,9 @@ Ordered by severity. Each entry: what, where, why it matters, and a fix scoped t
 **Why**: Divergence risk when one gets edited.
 **Fix (small)**: Register one `leaveGame` handler; keep the two old event names as aliases pointing at the same function (back-compat with deployed clients). ~10-line diff.
 
-## 14. Dead config fields and dead files — LOW
+## 14. Dead config fields and dead files — LOW — **FIXED**
+
+> **Status: fixed.** Deleted `CARDS/GOLF-RULES`, stray `CARDS/package.json` + `CARDS/package-lock.json` (server tests use `CARDS/server`'s own socket.io-client — verified). Vestigial config fields stay for wire compat, annotated in `shared-types.ts`.
 
 **What**:
 - `GameConfig.totalCardsPerDeck` is never read; `numberOfDecks` is client-supplied but always overwritten by `decksNeeded()` at deal time (kept as a mutated field, which is confusing).
@@ -125,14 +127,18 @@ Ordered by severity. Each entry: what, where, why it matters, and a fix scoped t
 **Why**: Each one makes a newcomer ask "is this used?"
 **Fix (small)**: Delete `CARDS/GOLF-RULES`, delete `CARDS/package.json` + `CARDS/package-lock.json` (verify nothing imports from `CARDS/node_modules` first — the e2e scripts use `CARDS/server`'s own devDependency). Leave the config fields (wire-format compat) but add `// vestigial, ignored` comments.
 
-## 15. Issue tracker doesn't follow its own convention — LOW
+## 15. Issue tracker doesn't follow its own convention — LOW — **FIXED**
+
+> **Status: fixed.** `finish-implementation.md` now carries a header note: predates the convention, left as-is, new work follows `docs/agents/issue-tracker.md`.
 
 **What**: `docs/agents/issue-tracker.md` prescribes `.scratch/<feature-slug>/PRD.md` + `issues/NN-slug.md` with `Status:` lines. The only real file is a flat `.scratch/finish-implementation.md` checklist that predates the convention. Also `CLAUDE.md` references `CONTEXT.md` and `docs/adr/`, which don't exist (by design — created lazily by `/grill-with-docs` — but nothing says so where a newcomer will look).
 **Where**: `.scratch/`, `CLAUDE.md`, `docs/agents/domain.md`.
 **Why**: Agents following the docs will search for structure that isn't there.
 **Fix (small)**: Either migrate `finish-implementation.md` into the prescribed layout, or add one line to it: "predates the tracker convention; leave as-is." (The missing CONTEXT.md is already explained in `docs/agents/domain.md` — "proceed silently".)
 
-## 16. Local settings tracked in git; worktrees dir untracked noise — LOW (repo hygiene)
+## 16. Local settings tracked in git; worktrees dir untracked noise — LOW (repo hygiene) — **FIXED**
+
+> **Status: fixed.** `.claude/settings.local.json` untracked (`git rm --cached`) and both it and `.claude/worktrees/` added to `.gitignore`. `.claude/launch.json` stays tracked (shared preview config).
 
 **What**: `.claude/settings.local.json` is tracked and shows as perpetually modified; `.claude/worktrees/` shows as untracked.
 **Where**: `.gitignore` (missing entries), `.claude/`.
