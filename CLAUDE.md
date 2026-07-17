@@ -1,3 +1,75 @@
+# CLAUDE.md
+
+Real-time multiplayer card game (Golf / Cabo / Classic). Socket.IO TypeScript server + React/Vite client, no database, state in memory.
+
+- **Architecture, data flow, design decisions** → [PROJECT.md](PROJECT.md)
+- **Known weaknesses, ranked, with scoped fixes** → [GAPS.md](GAPS.md)
+- **Golf rules (matches server scoring exactly)** → [CARDS/GOLF_RULES.md](CARDS/GOLF_RULES.md)
+
+## Commands
+
+All from the listed directory. Windows dev box; scripts assume Git Bash for `&&`.
+
+```sh
+# server (CARDS/server/)
+npm run dev            # ts-node watch on :3001
+npm run build          # npm install + tsc → dist/   (yes, install is part of build — deploy hosts run it)
+npm start              # node dist/index.js
+
+# client (CARDS/client/)
+npm run dev            # vite on :5173
+npm run build          # tsc -b && vite build → dist/
+
+# tests (CARDS/server/) — ALL need a server already running on :3001 (or SERVER_URL=...)
+npm run test:dealing && npm run test:dealing:golf
+npm run test:reaper && npm run test:validation
+npm run e2e && npm run e2e:golf && npm run e2e:cabo
+npm run e2e:cabo:specials   # server must be started with TEST_HOOKS=1 or this times out
+```
+
+No lint config. No test framework — tests are plain scripts that `process.exit(0|1)`.
+
+Deploy: server → Fly (`CARDS/server/fly.toml`, walkthrough in `CARDS/README.md`) or Render (`render.yaml` at root, no card needed); client → Vercel with env `VITE_SERVER_URL=<server url>` (baked at build — redeploy after changing it).
+
+## The two files that matter
+
+- `CARDS/server/src/index.ts` — entire server: types, state Maps, rules, scoring, every socket handler. Sectioned with `// ----` banners.
+- `CARDS/client/src/ui/App.tsx` — entire client: theme tokens, components, both game tables, socket plumbing.
+
+Keep it that way. Don't split files or add dependencies without being asked.
+
+## Conventions
+
+- **Socket protocol**: client `emit(event, payload, ack)`; server acks `{ ok: true, ... }` or `{ error: string }`. Event names are `mode:action` (`golf:draw`, `cabo:snap`); shared ones are bare (`createGame`, `startGame`).
+- **Every server mutation ends with `broadcastSnapshot(io, state)`**. Private data (own cards, pending draws) goes through `emitToPlayer(...)` per-player events (`golf:hand`, `cabo:hand`, `hand:update`) — never through the snapshot.
+- **Handler shape**: get state → validate (game exists, mode, phase, turn) → mutate → private emits → `caboEndTurn`/`advanceTurn` if turn-consuming → broadcast → ack. Copy an adjacent handler when adding one.
+- **Client state**: plain `useState` in `App.tsx`, socket listeners registered once in the mount `useEffect`. No state library — don't add one.
+- **Styling**: inline styles from the `theme` token object ("midnight card room": felt-green `dark` ramp, gold `primary`, slate `secondary` reserved for Cabo powers, sage success, ember warning, clay error). Animations/focus rules live in the `globalStyles` string. Fraunces = display headings, DM Sans = UI (loaded in `index.html`). Use `notify(msg)` toasts for errors, never `window.alert`.
+- **Commits**: conventional prefixes (`feat:`, `fix:`, `test:`, `docs:`, `chore:`), body explains why.
+
+## Gotchas
+
+- **Tests fail with connect timeouts, not messages, when the server isn't running.** Start the server first. `e2e:cabo:specials` needs the *server* started with `TEST_HOOKS=1`, not the test process.
+- **New server test file? Add it to `CARDS/server/tsconfig.json` `exclude`** or the production build compiles it and can break.
+- **`typescript` and `@types/*` are in server `dependencies` on purpose** (build runs on prod hosts). Don't move them to devDependencies.
+- **Types are duplicated client/server by hand** (`Card`↔`CardT`, snapshot shape). Adding a snapshot field = edit both files.
+- **The client string-matches one server error verbatim**: `'Wrong rank — 2 penalty cards drawn'` (cabo snap). Don't reword one side only.
+- **Turn checks on follow-up actions are implicit**: accept/reject/place/power handlers rely on "only the turn player can hold a pendingDraw". Don't create any other way to acquire a pendingDraw.
+- **`currentTurnIndex` starts at 1**, not 0 — the second player acts first, per the rules. Not a bug.
+- **`cardsPerPlayer` is mode-dependent**: golf ∈ {4,6,8}, cabo = always 4, classic 1–13.
+- **`config.numberOfDecks` from the client is ignored** — recomputed by `decksNeeded()` at deal time. Preserve that invariant in any dealer change.
+- **Cabo shows your own cards face-up all round.** Deliberate divergence from real Cabo (for now) — read GAPS.md #2 before "fixing".
+
+## Rules
+
+- **Never expose cards through `publicGameSnapshot()`** beyond what it already reveals (golf: `revealed && locked && !peekOnly` only; cabo: slotIds only). That function is the privacy boundary.
+- **Server is authoritative.** No game rules, scoring, or shuffling on the client, ever.
+- **Never trust client input**: new payload fields go through the sanitize/clamp helpers (`sanitizeName`, `clampInt`, `sanitizeConfig` pattern).
+- **Don't remove the `TEST_HOOKS` gate** and never set `TEST_HOOKS=1` in a deploy config — it enables a deck-stacking cheat endpoint.
+- **Scoring functions (`calculateGolfScore`, `caboCardValue`, `finalizeCaboRound`) must match `CARDS/GOLF_RULES.md`**; run the e2e suites after touching them.
+- **No database, no Redis, no state library, no CSS framework** — in-memory friends-scale is a stated design decision.
+- **`dist/` is generated** (both packages) — never edit.
+
 ## Agent skills
 
 ### Issue tracker
@@ -10,4 +82,4 @@ Uses default triage label strings (needs-triage, needs-info, ready-for-agent, re
 
 ### Domain docs
 
-Single-context repo — one `CONTEXT.md` + `docs/adr/` at root. See `docs/agents/domain.md`.
+Single-context repo — one `CONTEXT.md` + `docs/adr/` at root. See `docs/agents/domain.md`. (Neither exists yet — created lazily by `/grill-with-docs`; proceed silently if absent.)
