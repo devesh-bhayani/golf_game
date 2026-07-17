@@ -4,14 +4,18 @@ Ordered by severity. Each entry: what, where, why it matters, and a fix scoped t
 
 ---
 
-## 1. Classic mode is half-finished and exposed in the UI — HIGH
+## 1. Classic mode is half-finished and exposed in the UI — HIGH — **FIXED**
+
+> **Status: fixed.** The `classic` option is removed from the create-screen `<select>`; server handlers and the classic table view are kept for rejoin safety.
 
 **What**: `playCard`/`drawCard` have no turn order, no phase check, no round/game end, no scoring, and `drawCard` never reshuffles. Any player can play any card at any time, forever.
 **Where**: `CARDS/server/src/index.ts` (`socket.on('playCard'…)`, `socket.on('drawCard'…)`, marked `// ---- Classic mode (preserved) ----`); mode selectable in the create screen of `CARDS/client/src/ui/App.tsx`.
 **Why**: A user picking "Classic" gets something that looks broken. It also drags vestigial state (`hands`, `centerPile`) through every snapshot.
 **Fix (small)**: Remove `classic` from the client's mode `<select>` so it can't be created from the UI. Leave the server handlers (they're rejoin-safe and harmless). One-line client change + delete one `<option>`.
 
-## 2. Cabo shows your own hand face-up all round — HIGH (gameplay correctness)
+## 2. Cabo shows your own hand face-up all round — HIGH (gameplay correctness) — **FIXED**
+
+> **Status: fixed (client-side).** Own slots render face-down during play; only a 7/8 peek-own result flips that one slot for ~4s (`peekedHere` in `CaboTable`). The server still sends the full hand via `cabo:hand` (needed for the peek phase and slot identity).
 
 **What**: The server sends the owner their full hand via `cabo:hand` on every deal/mutation, and the client renders `showFaceUp={!!privateCard}` — so you always see all 4 of your cards. Real Cabo is a memory game: after the initial 2-card peek, your own cards are face-down too.
 **Where**: server: every `emitToPlayer(io, state, pid, 'cabo:hand', …)` in `index.ts`; client: `CaboSlotView` usage inside `CaboTable` in `App.tsx`.
@@ -25,14 +29,18 @@ Ordered by severity. Each entry: what, where, why it matters, and a fix scoped t
 **Why**: Known and documented as acceptable for friends-scale (`CARDS/README.md`). Listed so nobody re-discovers it as a surprise.
 **Fix**: None needed now. If it ever matters: serialize `games` to a JSON file on SIGTERM and reload on boot (Maps/Sets need a custom replacer). Do not add Redis for this.
 
-## 4. `globalLeaderboard` grows forever and is keyed by ephemeral IDs — MEDIUM
+## 4. `globalLeaderboard` grows forever and is keyed by ephemeral IDs — MEDIUM — **PARTIALLY FIXED**
+
+> **Status: growth capped at 100 entries** after the sort in both finalizers. Still keyed by ephemeral playerIds (semantic weirdness remains; acceptable for a decorative feature).
 
 **What**: An unbounded array, appended every finished game, keyed by `playerId` — which is regenerated every join. The same human accumulates unrelated entries under different IDs; entries never expire; sorted with `.find()` linear scans.
 **Where**: `index.ts` `globalLeaderboard`, `finalizeGame`, `finalizeCaboGame`, `getLeaderboard`.
 **Why**: Slow memory leak plus a leaderboard that's semantically meaningless across sessions (also lost on restart per #3).
 **Fix (small)**: Cap it — after the sort in both finalizers, `globalLeaderboard.length = Math.min(globalLeaderboard.length, 100)`. Or delete the feature (client button + handler + array); it's decorative.
 
-## 5. No CI; tests are manual two-terminal scripts — MEDIUM
+## 5. No CI; tests are manual two-terminal scripts — MEDIUM — **FIXED**
+
+> **Status: fixed.** `.github/workflows/test.yml` starts the server with `TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700`, waits on `/health`, runs all 8 suites, checks the prod `tsc` build, and builds the client. Local runs still need the same server envs (reaper needs the short TTL).
 
 **What**: 7 test scripts exist and are genuinely good, but nothing runs them automatically. They require a separately-started server on :3001, one (`e2e:cabo:specials`) requires the server env `TEST_HOOKS=1`, and none of this is written down outside a PR description.
 **Where**: `CARDS/server/src/test-*.ts`, `e2e*.ts`; scripts in `CARDS/server/package.json`.

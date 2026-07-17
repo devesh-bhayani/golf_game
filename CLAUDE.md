@@ -21,11 +21,15 @@ npm run dev            # vite on :5173
 npm run build          # tsc -b && vite build → dist/
 
 # tests (CARDS/server/) — ALL need a server already running on :3001 (or SERVER_URL=...)
+# Start it with the full test env so every suite passes:
+#   TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700 npm run dev
 npm run test:dealing && npm run test:dealing:golf
-npm run test:reaper && npm run test:validation
+npm run test:reaper && npm run test:validation    # reaper needs the short-TTL envs
 npm run e2e && npm run e2e:golf && npm run e2e:cabo
-npm run e2e:cabo:specials   # server must be started with TEST_HOOKS=1 or this times out
+npm run e2e:cabo:specials   # needs TEST_HOOKS=1 on the server or this times out
 ```
+
+CI: `.github/workflows/test.yml` runs all suites + both builds on every push/PR.
 
 No lint config. No test framework — tests are plain scripts that `process.exit(0|1)`.
 
@@ -58,7 +62,8 @@ Keep it that way. Don't split files or add dependencies without being asked.
 - **`currentTurnIndex` starts at 1**, not 0 — the second player acts first, per the rules. Not a bug.
 - **`cardsPerPlayer` is mode-dependent**: golf ∈ {4,6,8}, cabo = always 4, classic 1–13.
 - **`config.numberOfDecks` from the client is ignored** — recomputed by `decksNeeded()` at deal time. Preserve that invariant in any dealer change.
-- **Cabo shows your own cards face-up all round.** Deliberate divergence from real Cabo (for now) — read GAPS.md #2 before "fixing".
+- **Cabo own cards are face-down during play (client-enforced).** The server still sends your full hand via `cabo:hand`; the client hides it except the transient 7/8 peek-own reveal. Don't "simplify" by rendering `privateCard` face-up — that undoes GAPS.md #2.
+- **Classic mode is hidden from the create screen** (half-finished; GAPS.md #1). Server handlers remain for rejoin safety.
 
 ## Rules
 

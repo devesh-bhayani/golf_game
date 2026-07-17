@@ -1130,7 +1130,6 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
             const hasBlackKingIndicator = cabo.blackKingPlayers?.includes(h.playerId);
 
             // my slots from private event
-            const privateSlots = isMe ? (mySlots ?? []) : null;
 
             const perRow = 2;
             const totalSlots = h.slots.length;
@@ -1167,7 +1166,9 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                       <div key={rowIdx} style={{ display: 'grid', gridTemplateColumns: `repeat(${rowSlots.length}, auto)`, gap: cardGap, width: 'fit-content', marginTop: rowIdx > 0 ? cardGap : 0 }}>
                         {rowSlots.map((s) => {
                           if (isMe) {
-                            const privateCard = privateSlots?.find((ps) => ps.slotId === s.slotId)?.card ?? null;
+                            // Cabo is a memory game: own cards stay face-down after the
+                            // initial peek. Only a 7/8 peek-own result flips one briefly.
+                            const peekedHere = peekResult?.slotId === s.slotId;
                             const isSelectableOwnSlot = (
                               (isMyTurn && hasPendingDraw && !hasBlackKingPending && specialMode === 'none' && !snapMode) ||
                               specialMode === 'peek-own' ||
@@ -1178,7 +1179,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                             const isSlideTarget = !!(snapGap && snapSlideSlot === null);
                             return (
                               <CaboSlotView key={s.slotId}
-                                card={privateCard}
+                                card={peekedHere ? peekResult!.card : null}
                                 selectable={isSelectableOwnSlot || isSlideTarget}
                                 selected={selectedOwnSlot === s.slotId || snapSlideSlot === s.slotId}
                                 snapTarget={snapMode}
@@ -1187,7 +1188,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                                   handleOwnSlotClick(s.slotId);
                                 }}
                                 cardSize={cardSize}
-                                showFaceUp={!!privateCard}
+                                showFaceUp={peekedHere}
                               />
                             );
                           } else {
@@ -1522,7 +1523,8 @@ export function App() {
                 }} style={{ ...inputStyle, cursor: 'pointer' }}>
                   <option value="golf">Golf</option>
                   <option value="cabo">Cabo</option>
-                  <option value="classic">Classic</option>
+                  {/* classic hidden: half-finished (no turns, no game end) — GAPS.md #1.
+                      Server handlers + table view kept for rejoin safety. */}
                 </select>
               </div>
               {gameMode !== 'cabo' && (

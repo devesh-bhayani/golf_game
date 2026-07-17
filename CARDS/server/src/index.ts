@@ -581,6 +581,9 @@ function finalizeCaboGame(state: GameState): void {
     }
   }
   globalLeaderboard.sort((a, b) => a.totalScore - b.totalScore);
+  // Unbounded growth guard: entries are keyed by ephemeral playerIds, so this
+  // is decorative session history, not durable data. Keep the best 100.
+  if (globalLeaderboard.length > 100) globalLeaderboard.length = 100;
 
   state.rematchAckByPlayer = new Set();
   autoAckDisconnected(state, state.rematchAckByPlayer);
@@ -729,6 +732,9 @@ function finalizeGame(state: GameState) {
     }
   }
   globalLeaderboard.sort((a, b) => a.totalScore - b.totalScore);
+  // Unbounded growth guard: entries are keyed by ephemeral playerIds, so this
+  // is decorative session history, not durable data. Keep the best 100.
+  if (globalLeaderboard.length > 100) globalLeaderboard.length = 100;
 
   state.rematchAckByPlayer = new Set();
   autoAckDisconnected(state, state.rematchAckByPlayer);
