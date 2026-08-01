@@ -4,16 +4,9 @@ import cors from 'cors';
 import { Server } from 'socket.io';
 import { customAlphabet } from 'nanoid';
 
-type Suit = 'spades' | 'hearts' | 'diamonds' | 'clubs';
-type Rank = 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
-
-type Card = {
-  cardId: string;
-  suit: Suit;
-  rank: Rank;
-  color: 'red' | 'black';
-  value: number;
-};
+// Wire types live in shared-types.ts (single source of truth with the client).
+// Type-only import: erased at compile time, so dist/ has no runtime dependency.
+import type { Suit, Rank, Card, GameMode, GamePhase, GameConfig } from './shared-types';
 
 type Player = {
   playerId: string;
@@ -22,25 +15,6 @@ type Player = {
   displayName: string;
   connected: boolean;
   disconnectedAt?: number;
-};
-
-type GameMode = 'classic' | 'golf' | 'cabo';
-
-type GamePhase =
-  | 'waiting'
-  | 'peek'
-  | 'play'
-  | 'cabo-called'
-  | 'between-rounds'
-  | 'ended'
-  | 'rematch-pending';
-
-type GameConfig = {
-  maxPlayers: number;
-  totalCardsPerDeck: number;
-  numberOfDecks: number;
-  cardsPerPlayer: number;
-  gameMode?: GameMode;
 };
 
 type GolfSlot = {
@@ -581,6 +555,9 @@ function finalizeCaboGame(state: GameState): void {
     }
   }
   globalLeaderboard.sort((a, b) => a.totalScore - b.totalScore);
+  // Unbounded growth guard: entries are keyed by ephemeral playerIds, so this
+  // is decorative session history, not durable data. Keep the best 100.
+  if (globalLeaderboard.length > 100) globalLeaderboard.length = 100;
 
   state.rematchAckByPlayer = new Set();
   autoAckDisconnected(state, state.rematchAckByPlayer);
@@ -729,6 +706,9 @@ function finalizeGame(state: GameState) {
     }
   }
   globalLeaderboard.sort((a, b) => a.totalScore - b.totalScore);
+  // Unbounded growth guard: entries are keyed by ephemeral playerIds, so this
+  // is decorative session history, not durable data. Keep the best 100.
+  if (globalLeaderboard.length > 100) globalLeaderboard.length = 100;
 
   state.rematchAckByPlayer = new Set();
   autoAckDisconnected(state, state.rematchAckByPlayer);
@@ -1126,6 +1106,11 @@ io.on('connection', (socket) => {
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
     if (!state.golfHands || !state.discardPile) return ack({ error: 'Not a golf game' });
     if (state.phase !== 'play') return ack({ error: 'Cannot act in this phase' });
+    // Explicit turn check: a pendingDraw normally implies it's your turn, but
+    // golf:kickPlayer can advance the turn past a player still holding one.
+    if (state.turnOrder && state.turnOrder[state.currentTurnIndex || 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
     const card = state.pendingDrawByPlayer.get(currentPlayerId);
     if (!card) return ack({ error: 'No pending card' });
     const slots = state.golfHands.get(currentPlayerId)!;
@@ -1150,6 +1135,10 @@ io.on('connection', (socket) => {
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
     if (!state.golfHands || !state.discardPile) return ack({ error: 'Not a golf game' });
     if (state.phase !== 'play') return ack({ error: 'Cannot act in this phase' });
+    // Explicit turn check: see golf:acceptDrawAndSwap.
+    if (state.turnOrder && state.turnOrder[state.currentTurnIndex || 0] !== currentPlayerId) {
+      return ack({ error: 'Not your turn' });
+    }
     const card = state.pendingDrawByPlayer.get(currentPlayerId);
     if (!card) return ack({ error: 'No pending card' });
 
@@ -1233,7 +1222,9 @@ io.on('connection', (socket) => {
     ack({ ok: true });
   });
 
-  socket.on('golf:leaveGame', (_: {}, ack: (res: any) => void) => {
+  // Shared by golf:leaveGame and cabo:leaveGame (identical semantics; two
+  // event names kept for wire compat with deployed clients).
+  function handleLeaveGame(ack: (res: any) => void) {
     const state = getState();
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
     if (state.phase !== 'waiting' && state.phase !== 'rematch-pending') {
@@ -1260,7 +1251,9 @@ io.on('connection', (socket) => {
 
     if (games.has(state.gameId)) broadcastSnapshot(io, state);
     ack({ ok: true });
-  });
+  }
+
+  socket.on('golf:leaveGame', (_: {}, ack: (res: any) => void) => handleLeaveGame(ack));
 
   socket.on('golf:updateConfig', (payload: { cardsPerPlayer: number }, ack: (res: any) => void) => {
     const state = getState();
@@ -1321,6 +1314,9 @@ io.on('connection', (socket) => {
     if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
     if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
 
+    // Turn-gated implicitly: only the turn player can hold a caboPendingDraw
+    // (cabo:draw is turn-checked and the turn doesn't advance until resolved).
+    // Never add another way to acquire a pendingDraw without revisiting this.
     const drawn = state.caboPendingDraw?.get(currentPlayerId);
     if (!drawn) return ack({ error: 'No pending draw' });
 
@@ -1371,6 +1367,7 @@ io.on('connection', (socket) => {
     if (state.config.gameMode !== 'cabo' || !state.caboHands || !state.discardPile) return ack({ error: 'Not a Cabo game' });
     if (state.phase !== 'play' && state.phase !== 'cabo-called') return ack({ error: 'Cannot act in this phase' });
 
+    // Turn-gated implicitly via pendingDraw — see cabo:placeDrawn.
     const drawn = state.caboPendingDraw?.get(currentPlayerId);
     if (!drawn) return ack({ error: 'No pending draw' });
 
@@ -1626,7 +1623,9 @@ io.on('connection', (socket) => {
       }
       emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
       broadcastSnapshot(io, state);
-      return ack({ ok: false, error: 'Wrong rank — 2 penalty cards drawn' });
+      // `code` is the machine-readable contract; the client matches it (not the
+      // human string, which is free to change).
+      return ack({ ok: false, code: 'WRONG_SNAP', error: 'Wrong rank — 2 penalty cards drawn' });
     }
 
     // Correct snap: remove card from target's hand
@@ -1716,32 +1715,65 @@ io.on('connection', (socket) => {
     ack({ ok: true });
   });
 
-  socket.on('cabo:leaveGame', (_: {}, ack: (res: any) => void) => {
+  socket.on('cabo:leaveGame', (_: {}, ack: (res: any) => void) => handleLeaveGame(ack));
+
+  socket.on('cabo:kickPlayer', (payload: { playerId: string }, ack: (res: any) => void) => {
     const state = getState();
     if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
-    if (state.phase !== 'waiting' && state.phase !== 'rematch-pending') {
-      return ack({ error: 'Cannot leave mid-game; disconnect to stop playing' });
-    }
-    const player = state.players.get(currentPlayerId);
-    if (!player) return ack({ error: 'Player not found' });
-
-    state.players.delete(currentPlayerId);
-    tokenIndex.delete(player.playerToken);
-
-    if (state.hostId === currentPlayerId) {
-      const next = Array.from(state.players.keys())[0];
-      if (next) state.hostId = next;
-    }
-    if (state.players.size === 0) {
-      codeToGameId.delete(state.code);
-      games.delete(state.gameId);
+    if (state.config.gameMode !== 'cabo' || !state.caboHands) return ack({ error: 'Not a Cabo game' });
+    if (state.hostId !== currentPlayerId) return ack({ error: 'Only host can kick' });
+    const target = state.players.get(payload.playerId);
+    if (!target) return ack({ error: 'Player not found' });
+    if (target.connected) return ack({ error: 'Player is connected' });
+    if (!target.disconnectedAt || Date.now() - target.disconnectedAt < 30_000) {
+      return ack({ error: 'Grace period not elapsed' });
     }
 
-    socket.leave(state.gameId);
-    currentGameId = null;
-    currentPlayerId = null;
+    // Return an unresolved drawn card to the discard so it isn't lost.
+    const pending = state.caboPendingDraw?.get(target.playerId);
+    if (pending && state.discardPile) state.discardPile.push(pending);
+    state.caboPendingDraw?.delete(target.playerId);
+    state.caboBlackKingPending?.delete(target.playerId);
+    state.caboSnapGapPending?.delete(target.playerId);
 
-    if (games.has(state.gameId)) broadcastSnapshot(io, state);
+    // Remove their hand (not scored this round) and their turn-order slot so
+    // play never stalls waiting on them.
+    state.caboHands.delete(target.playerId);
+    if (state.caboTurnOrder) {
+      const idx = state.caboTurnOrder.indexOf(target.playerId);
+      if (idx !== -1) {
+        const wasTheirTurn = idx === (state.caboCurrentTurnIndex ?? 0);
+        state.caboTurnOrder.splice(idx, 1);
+        const n = state.caboTurnOrder.length;
+        if (n > 0) {
+          let cur = state.caboCurrentTurnIndex ?? 0;
+          if (idx < cur) cur -= 1;
+          if (cur >= n) cur = 0;
+          // After the splice, cur already points at the next player when it was
+          // the kicked player's turn.
+          state.caboCurrentTurnIndex = cur;
+        }
+        if (wasTheirTurn && state.phase === 'cabo-called') {
+          // Their forfeited final turn still counts against the countdown.
+          // ponytail: if the new current player is the caller this hands them a
+          // dead turn; rare enough (kick mid-final-turns) to accept for now.
+          const remaining = (state.caboFinalTurnsLeft ?? 0) - 1;
+          state.caboFinalTurnsLeft = Math.max(0, remaining);
+          if (remaining <= 0) {
+            finalizeCaboRound(io, state);
+            broadcastSnapshot(io, state);
+            return ack({ ok: true });
+          }
+        }
+      }
+    }
+
+    // Never block ack-gated phases on them again.
+    state.caboPeekAckByPlayer?.add(target.playerId);
+    state.betweenRoundAckByPlayer.add(target.playerId);
+    state.rematchAckByPlayer.add(target.playerId);
+
+    broadcastSnapshot(io, state);
     ack({ ok: true });
   });
 

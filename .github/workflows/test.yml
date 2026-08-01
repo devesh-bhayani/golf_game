@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CARDS/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      # All test scripts connect to a live server on :3001. TEST_HOOKS=1 enables
+      # the deck-injection hook that e2e:cabo:specials needs (never set in deploys).
+      # Short reaper TTL is what test:reaper expects; harmless for other suites
+      # (only fully-disconnected games get reaped).
+      - name: Start server in background
+        run: |
+          TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700 nohup node --loader ts-node/esm src/index.ts > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3001/health && break
+            sleep 1
+          done
+          curl -sf http://localhost:3001/health
+      - run: npm run test:dealing
+      - run: npm run test:dealing:golf
+      - run: npm run test:reaper
+      - run: npm run test:validation
+      - run: npm run e2e
+      - run: npm run e2e:golf
+      - run: npm run e2e:cabo
+      - run: npm run e2e:cabo:specials
+      # Catches test files missing from tsconfig "exclude" breaking the prod build
+      - run: npx tsc -p tsconfig.json
+      - name: Server log on failure
+        if: failure()
+        run: cat server.log
+
+  client-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CARDS/client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run build
