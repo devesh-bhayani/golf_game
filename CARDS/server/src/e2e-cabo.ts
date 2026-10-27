@@ -67,6 +67,8 @@ async function run() {
 	const snap: Record<string, any> = {};
 	a.on('cabo:hand', (slots: CaboSlotT[]) => (hand.a = slots));
 	b.on('cabo:hand', (slots: CaboSlotT[]) => (hand.b = slots));
+	a.on('game:private', (state: any) => { hand.a = state.caboSlots; });
+	b.on('game:private', (state: any) => { hand.b = state.caboSlots; });
 	a.on('game:update', (g: any) => (snap.a = g));
 	b.on('game:update', (g: any) => (snap.b = g));
 
@@ -119,7 +121,7 @@ async function run() {
 	const aPlace: any = await emit(a, 'cabo:placeDrawn', { slotId: aSlot0 });
 	assert(aPlace?.ok, `A placeDrawn failed: ${JSON.stringify(aPlace)}`);
 	await delay(120);
-	assert(hand.a[0].card.cardId === aDraw.card.cardId, 'A slot 0 should now hold the drawn card');
+	assert(hand.a.every(s => s.card === null), 'Own hidden cards must stay masked during play');
 	assert(snap.a.cabo.turn === pidB, `expected B's turn after A places, turn=${snap.a.cabo.turn}`);
 	console.log('✓ A drew and swapped into slot 0; turn advanced to B');
 
@@ -133,8 +135,7 @@ async function run() {
 	console.log('✓ B called Cabo; A gets the final turn');
 
 	// Capture round-1 final hands (unchanged from here until next round is dealt).
-	const aHandR1 = hand.a;
-	const bHandR1 = hand.b;
+
 
 	// --- 8. A takes the final turn -> round finalizes -> between-rounds ---
 	const aDraw2: any = await emit(a, 'cabo:draw', {});
@@ -146,8 +147,9 @@ async function run() {
 	console.log('✓ Final turn taken; round finalized -> between-rounds');
 
 	// --- 9. Verify scoring matches the rules (lowest hand = 0; caller +5 otherwise) ---
-	const rawA = handScore(aHandR1);
-	const rawB = handScore(bHandR1);
+	assert(hand.a[0].card.cardId === aDraw.card.cardId, 'Placed card must be correct at round reveal');
+	const rawA = handScore(hand.a);
+	const rawB = handScore(hand.b);
 	const min = Math.min(rawA, rawB);
 	const lowest = new Set<string>();
 	if (rawA === min) lowest.add(pidA);
@@ -175,7 +177,8 @@ async function run() {
 	assert(hand.a?.length === 4 && hand.b?.length === 4, 'expected fresh 4-card hands in round 2');
 	console.log('✓ Advanced to round 2 (peek phase, fresh hands)');
 
-	// --- 11. Wrong-snap penalty path (round 2 play) ---
+	// --- 11. Use legitimately peeked cards to choose a wrong snap ---
+	const remembered = hand.a.filter(s => s.card);
 	await emit(a, 'cabo:ackPeek', {});
 	await emit(b, 'cabo:ackPeek', {});
 	await delay(120);
@@ -183,7 +186,7 @@ async function run() {
 
 	const discardTop: CardT | null = snap.a.discardTop;
 	assert(discardTop, 'expected a discard top in round 2');
-	const mismatchSlot = hand.a.find((s) => s.card.rank !== discardTop!.rank);
+	const mismatchSlot = remembered.find((s) => s.card.rank !== discardTop!.rank);
 	if (mismatchSlot) {
 		const before = hand.a.length;
 		const snapRes: any = await emit(a, 'cabo:snap', { targetType: 'own', targetSlotId: mismatchSlot.slotId });

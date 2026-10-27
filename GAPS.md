@@ -1,5 +1,7 @@
 # GAPS.md — honest audit
 
+> **October 26 release update:** Historical entries below describe the earlier MVP. Current implementation and remaining public/device checks are tracked in `.scratch/contest-release/PRD.md`. Server-enforced own-card privacy, readiness on disconnect, mode/phase validation, lobby restoration, host transfer, forfeit handling, pending-decision recovery, rank-rule documentation, tie-breaks, onboarding, and a full-match regression suite have since been implemented. In-memory room loss on restart remains a documented limitation.
+
 Ordered by severity. Each entry: what, where, why it matters, and a fix scoped to a single small task.
 
 ---

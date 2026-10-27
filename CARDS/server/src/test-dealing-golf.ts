@@ -83,12 +83,12 @@ async function testGolfDealing(players: number, cardsPerPlayer: number) {
 		);
 		hand.forEach((slot, s) => {
 			assert(
-				slot && slot.card && typeof slot.card.rank === 'string',
+				slot && typeof slot.slotId === 'string' && (s < cardsPerPlayer / 2 ? slot.card === null : typeof slot.card?.rank === 'string'),
 				`P${i + 1} slot ${s} has no real card (got ${JSON.stringify(slot?.card)})`,
 			);
 		});
 	}
-	console.log(`  ✓ All ${players} players have ${cardsPerPlayer} real cards (no undefined)`);
+	console.log(`  ✓ All ${players} players have ${cardsPerPlayer} slots with only the authorized bottom-row peek visible`);
 
 	// 2. A draw pile and a discard top exist (the game can actually be played).
 	assert(snapshot, 'no public snapshot received');

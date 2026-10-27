@@ -39,7 +39,7 @@ export type GameConfig = {
 export type GolfSlotT = { slotId: string; revealed: boolean; locked: boolean; card: Card | null };
 
 // Own Cabo hand as delivered by the private `cabo:hand` event.
-export type CaboSlotPrivate = { slotId: string; card: Card };
+export type CaboSlotPrivate = { slotId: string; card: Card | null };
 
 // The `game:update` payload built by publicGameSnapshot().
 export type GameSnapshot = {
@@ -52,6 +52,9 @@ export type GameSnapshot = {
   players: { playerId: string; displayName: string; connected: boolean; disconnectedAt?: number }[];
   centerPile: Card[];
   extraDeckCount: number;
+  matchNumber: number;
+  notice?: string;
+  paused?: boolean;
   currentRound: number;
   targetRounds: number;
   discardTop?: Card | null;
@@ -81,4 +84,15 @@ export type GameSnapshot = {
   caboRoundScores?: { playerId: string; scores: number[] }[];
   caboCumulativeScores?: Record<string, number>;
   caboLeaderboard?: Array<{ rank: number; displayName: string; score: number; playerId: string }>;
+};
+
+export type PrivateGameState = {
+  gameId: string; matchNumber: number; round: number;
+  golfSlots: Array<GolfSlotT & { peekOnly?: boolean }>;
+  caboSlots: CaboSlotPrivate[];
+  pendingDraw: Card | null;
+  caboPendingDraw: Card | null;
+  blackKing: { targetPlayerId: string; slotId: string; card: Card } | null;
+  snapGap: { opponentId: string } | null;
+  scoreDetails: Array<{ label: string; points: number }>;
 };

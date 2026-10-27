@@ -64,6 +64,8 @@ async function run() {
 	const snap: Record<string, any> = {};
 	a.on('cabo:hand', (s: CaboSlotT[]) => { hand.a = s; });
 	b.on('cabo:hand', (s: CaboSlotT[]) => { hand.b = s; });
+	a.on('game:private', (s: any) => { hand.a = s.caboSlots; });
+	b.on('game:private', (s: any) => { hand.b = s.caboSlots; });
 	a.on('game:update', (g: any) => { snap.a = g; });
 	b.on('game:update', (g: any) => { snap.b = g; });
 
@@ -80,10 +82,10 @@ async function run() {
 	await new Promise((r) => setTimeout(r, 150));
 
 	// --- verify initial hands ---
-	const aRanks = hand.a.map((s) => s.card.rank).join(',');
-	const bRanks = hand.b.map((s) => s.card.rank).join(',');
-	assert(aRanks === '2,3,4,5', `A hand wrong: ${aRanks}`);
-	assert(bRanks === '6,8,9,10', `B hand wrong: ${bRanks}`);
+	const aRanks = hand.a.map((s) => s.card?.rank ?? 'hidden').join(',');
+	const bRanks = hand.b.map((s) => s.card?.rank ?? 'hidden').join(',');
+	assert(aRanks === 'hidden,hidden,4,5', `A hand wrong: ${aRanks}`);
+	assert(bRanks === 'hidden,hidden,9,10', `B hand wrong: ${bRanks}`);
 	console.log(`✓ Stacked deck dealt exactly (A=${aRanks} B=${bRanks})`);
 
 	await emit(a, 'cabo:ackPeek', {});
@@ -126,7 +128,7 @@ async function run() {
 	assert(snap.a.cabo.turn === pidB, `expected B turn before snap, got ${snap.a.cabo.turn}`);
 
 	// ===== Correct self-snap (B): discard=9d rank=9 matches B slot 2 (9h) =====
-	assert(hand.b[2].card.rank === '9', `B slot 2 should be 9, got ${hand.b[2].card.rank}`);
+	assert(hand.b[2].card === null, 'The remembered 9 must be hidden during play');
 	const snapAck: any = await emit(b, 'cabo:snap', { targetType: 'own', targetSlotId: bSlot2Id });
 	assert(snapAck?.ok === true, `correct snap rejected: ${JSON.stringify(snapAck)}`);
 	await new Promise((r) => setTimeout(r, 120));
@@ -150,9 +152,7 @@ async function run() {
 	// B slot 0 should now hold what was A slot 3 (5s); A slot 3 should hold what was B slot 0 (6h)
 	const bSlot0Post = hand.b.find((s) => s.slotId === bSlot0Id);
 	const aSlot3Post = hand.a.find((s) => s.slotId === aSlot3Id);
-	assert(bSlot0Post?.card?.rank === '5', `B slot 0 post-swap want 5, got ${bSlot0Post?.card?.rank}`);
-	assert(aSlot3Post?.card?.rank === '6', `A slot 3 post-swap want 6, got ${aSlot3Post?.card?.rank}`);
-	console.log(`✓ blind-swap: B slot 0 = ${bSlot0Post?.card?.rank}s, A slot 3 = ${aSlot3Post?.card?.rank}h`);
+	assert(bSlot0Post?.card === null && aSlot3Post?.card === null, 'Blind swap must not disclose cards');
 
 	await new Promise((r) => setTimeout(r, 120));
 	assert(snap.a.cabo.turn === pidA, `expected A after blind-swap, got ${snap.a.cabo.turn}`);
@@ -181,11 +181,16 @@ async function run() {
 	const decideAck: any = await emit(a, 'cabo:blackKingDecide', { swap: true, ownSlotId: aSlot0Id });
 	assert(decideAck?.ok, `blackKingDecide failed: ${JSON.stringify(decideAck)}`);
 	await Promise.all([aHandAfterBk, bHandAfterBk]);
-	const aSlot0Post = hand.a.find((s) => s.slotId === aSlot0Id);
-	const bSlot0PostBk = hand.b.find((s) => s.slotId === bSlot0Id);
-	assert(aSlot0Post?.card?.rank === '5', `A slot 0 post-bk-swap want 5, got ${aSlot0Post?.card?.rank}`);
-	assert(bSlot0PostBk?.card?.rank === '2', `B slot 0 post-bk-swap want 2, got ${bSlot0PostBk?.card?.rank}`);
-	console.log(`✓ black-king swap: A slot 0 = ${aSlot0Post?.card?.rank}s, B slot 0 = ${bSlot0PostBk?.card?.rank}s`);
+	assert(hand.a.every(s => s.card === null) && hand.b.every(s => s.card === null), 'Cards remain hidden after Black King swap');
+	await emit(b, 'cabo:callCabo', {});
+	await emit(a, 'cabo:draw', {});
+	await emit(a, 'cabo:discardDrawn', {});
+	await new Promise(r => setTimeout(r, 100));
+	assert(snap.a.phase === 'between-rounds', 'Round must finish');
+	assert(hand.a.find(s => s.slotId === aSlot0Id)?.card?.rank === '5', 'Black King moved 5 to A');
+	assert(hand.b.find(s => s.slotId === bSlot0Id)?.card?.rank === '2', 'Black King moved 2 to B');
+	assert(hand.a.find(s => s.slotId === aSlot3Id)?.card?.rank === '6', 'Blind swap moved 6 to A');
+	console.log('✓ Final reveal verifies both swaps without leaking hidden cards during play');
 
 	a.close();
 	b.close();

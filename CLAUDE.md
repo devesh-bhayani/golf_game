@@ -27,6 +27,7 @@ npm run test:dealing && npm run test:dealing:golf
 npm run test:reaper && npm run test:validation    # reaper needs the short-TTL envs
 npm run e2e && npm run e2e:golf && npm run e2e:cabo
 npm run e2e:cabo:specials   # needs TEST_HOOKS=1 on the server or this times out
+npm run test:release       # complete matches, privacy, reconnects, tie-breaks
 ```
 
 CI: `.github/workflows/test.yml` runs all suites + both builds on every push/PR.
@@ -37,7 +38,7 @@ Deploy: server → Fly (`CARDS/server/fly.toml`, walkthrough in `CARDS/README.md
 
 ## The two files that matter
 
-- `CARDS/server/src/index.ts` — entire server: types, state Maps, rules, scoring, every socket handler. Sectioned with `// ----` banners.
+- `CARDS/server/src/index.ts` — entire server: types, state Maps, rules, scoring, every socket handler. Current release checklist: `.scratch/contest-release/PRD.md`. Sectioned with `// ----` banners.
 - `CARDS/client/src/ui/App.tsx` — entire client: theme tokens, components, both game tables, socket plumbing.
 
 Keep it that way. Don't split files or add dependencies without being asked.
@@ -62,7 +63,7 @@ Keep it that way. Don't split files or add dependencies without being asked.
 - **`currentTurnIndex` starts at 1**, not 0 — the second player acts first, per the rules. Not a bug.
 - **`cardsPerPlayer` is mode-dependent**: golf ∈ {4,6,8}, cabo = always 4, classic 1–13.
 - **`config.numberOfDecks` from the client is ignored** — recomputed by `decksNeeded()` at deal time. Preserve that invariant in any dealer change.
-- **Cabo own cards are face-down during play (client-enforced).** The server still sends your full hand via `cabo:hand`; the client hides it except the transient 7/8 peek-own reveal. Don't "simplify" by rendering `privateCard` face-up — that undoes GAPS.md #2.
+- **Hidden own cards are masked by the server.** `game:private` restores authorized slots and pending decisions; `golf:hand`/`cabo:hand` are masked compatibility events. Only the authorized initial peek, drawn card, power result, and final reveal may carry values. Never restore full hidden hands to clients.
 - **Classic mode is hidden from the create screen** (half-finished; GAPS.md #1). Server handlers remain for rejoin safety.
 
 ## Rules

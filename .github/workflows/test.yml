@@ -37,6 +37,7 @@ jobs:
       - run: npm run e2e:golf
       - run: npm run e2e:cabo
       - run: npm run e2e:cabo:specials
+      - run: npm run test:release
       # Catches test files missing from tsconfig "exclude" breaking the prod build
       - run: npx tsc -p tsconfig.json
       - name: Server log on failure
