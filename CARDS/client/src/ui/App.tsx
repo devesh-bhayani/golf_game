@@ -921,16 +921,16 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             {!pendingDraw && (
               <>
-                <Btn onClick={() => { if (!selectedSlotId) return notify('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
-                <Btn variant="outline" disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
+                <Btn size={isMobile ? 'sm' : 'md'} onClick={() => { if (!selectedSlotId) return notify('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
+                <Btn variant="outline" size={isMobile ? 'sm' : 'md'} disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
               </>
             )}
             {pendingDraw && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ color: theme.colors.dark[300] }}>Drawn:</span>
-                <CardView card={pendingDraw} />
-                <Btn variant="success" onClick={() => { if (!selectedSlotId) return notify('Select a slot to swap'); emit('golf:acceptDrawAndSwap', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Accept & swap</Btn>
-                <Btn variant="warning" onClick={() => { if (!selectedSlotId) return notify('Select a slot to reveal'); emit('golf:rejectDrawAndReveal', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Reject & reveal</Btn>
+                <CardView card={pendingDraw} size={isMobile ? 'sm' : 'md'} hover={false} />
+                <Btn variant="success" size={isMobile ? 'sm' : 'md'} onClick={() => { if (!selectedSlotId) return notify('Select a slot to swap'); emit('golf:acceptDrawAndSwap', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Accept & swap</Btn>
+                <Btn variant="warning" size={isMobile ? 'sm' : 'md'} onClick={() => { if (!selectedSlotId) return notify('Select a slot to reveal'); emit('golf:rejectDrawAndReveal', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Reject & reveal</Btn>
               </div>
             )}
           </div>
@@ -1417,7 +1417,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
           {!hasPendingDraw && !hasBlackKingPending && (
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Btn disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => {
+              <Btn size={isMobile ? 'sm' : 'md'} disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => {
                 setDeckShaking(true);
                 setTimeout(() => setDeckShaking(false), 500);
                 emit('cabo:draw', {}, (r: any) => {
@@ -1425,7 +1425,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                   setPendingDraw(r.card);
                 });
               }}>Draw from deck</Btn>
-              <Btn variant="outline" disabled={!game.discardTop} onClick={() => {
+              <Btn variant="outline" size={isMobile ? 'sm' : 'md'} disabled={!game.discardTop} onClick={() => {
                 // Never guess the slot: replacing the wrong hidden card is not undoable.
                 if (!selectedOwnSlot || !mySlots?.some((s) => s.slotId === selectedOwnSlot)) return notify('Select one of your cards first, then take the discard');
                 emit('cabo:takeDiscard', { slotId: selectedOwnSlot }, (r: any) => {
@@ -1436,7 +1436,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                 {selectedOwnSlot ? 'Take discard → selected card' : 'Take discard'}
               </Btn>
               {phase === 'play' && (
-                <Btn variant="warning" onClick={() => setConfirmCabo(true)}>Call Cabo</Btn>
+                <Btn variant="warning" size={isMobile ? 'sm' : 'md'} onClick={() => setConfirmCabo(true)}>Call Cabo</Btn>
               )}
             </div>
           )}
@@ -1456,7 +1456,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
           {hasPendingDraw && pendingDraw && !hasBlackKingPending && (
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ color: theme.colors.dark[300] }}>Drawn:</span>
-              <CardView card={pendingDraw} />
+              <CardView card={pendingDraw} size={isMobile ? 'sm' : 'md'} hover={false} />
               <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}>
                 <span style={{ fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>
                   Click one of your cards to place it there
@@ -1500,6 +1500,15 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 export function App() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'offline' | 'replaced'>('connecting');
+  // Has this tab ever reached the server? A hosted server that was asleep can
+  // take up to a minute to wake, which should not read as "connection lost".
+  const [everConnected, setEverConnected] = useState(false);
+  const [slowStart, setSlowStart] = useState(false);
+  useEffect(() => {
+    if (everConnected) return;
+    const t = setTimeout(() => setSlowStart(true), 4000);
+    return () => clearTimeout(t);
+  }, [everConnected]);
   const [showRules, setShowRules] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [privateState, setPrivateState] = useState<PrivateGameState | null>(null);
@@ -1568,6 +1577,7 @@ export function App() {
 
     s.on('connect', () => {
       setConnection('connected');
+      setEverConnected(true);
       const tok = sessionStorage.getItem('golf_playerToken');
       const savedCode = sessionStorage.getItem('golf_code');
       if (tok && savedCode) {
@@ -1714,7 +1724,10 @@ export function App() {
         </div>
       </header>
       {connection !== 'connected' && <Panel role="status" style={{ maxWidth: 1000, margin: '0 auto 20px', padding: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span>{connection === 'connecting' ? 'Connecting to the card room…' : connection === 'replaced' ? 'Your seat moved to another tab.' : 'Connection lost. Reconnecting… Your seat is held for 30 seconds.'}</span>
+        <span>{connection === 'replaced' ? 'Your seat moved to another tab.'
+          : !everConnected ? (slowStart ? 'Waking up the card room… If nobody has played for a while, the server can take up to a minute to start. This page will connect on its own.' : 'Connecting to the card room…')
+          : connection === 'connecting' ? 'Connecting to the card room…'
+          : game ? 'Connection lost. Reconnecting… Your seat is held for 30 seconds.' : 'Connection lost. Reconnecting…'}</span>
         <Btn size="sm" variant="outline" onClick={() => { setConnection('connecting'); socket?.connect(); }}>Retry connection</Btn>
       </Panel>}
       {game?.notice && <p role="status" style={{ maxWidth: 1000, margin: '0 auto 16px', color: theme.colors.primary[300] }}>{game.notice}</p>}
