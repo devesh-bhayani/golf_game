@@ -41,6 +41,16 @@ export type GolfSlotT = { slotId: string; revealed: boolean; locked: boolean; ca
 // Own Cabo hand as delivered by the private `cabo:hand` event.
 export type CaboSlotPrivate = { slotId: string; card: Card | null };
 
+// The most recent public move, for the "last move" line and slot highlights.
+// `text` only ever names cards that are already face up for everyone.
+export type LastAction = {
+  seq: number;
+  actorId: string;
+  kind: string;      // e.g. 'golf:draw', 'cabo:blind-swap'
+  text: string;      // human-readable, starts with the actor's display name
+  slotIds: string[]; // slots the move touched (highlighted on every screen)
+};
+
 // The `game:update` payload built by publicGameSnapshot().
 export type GameSnapshot = {
   gameId: string;
@@ -49,7 +59,9 @@ export type GameSnapshot = {
   status: 'waiting' | 'active' | 'ended';
   phase: GamePhase;
   config: GameConfig;
-  players: { playerId: string; displayName: string; connected: boolean; disconnectedAt?: number }[];
+  players: { playerId: string; displayName: string; connected: boolean; disconnectedAt?: number; isBot?: boolean }[];
+  botsEnabled?: boolean; // server supports addBot/removeBot (lets a newer client run against an older server)
+  lastAction?: LastAction | null;
   centerPile: Card[];
   extraDeckCount: number;
   matchNumber: number;

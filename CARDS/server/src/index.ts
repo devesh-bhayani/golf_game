@@ -2,11 +2,12 @@ import express from 'express';
 import http from 'http';
 import cors from 'cors';
 import { Server } from 'socket.io';
+import type { Socket } from 'socket.io';
 import { customAlphabet } from 'nanoid';
 
 // Wire types live in shared-types.ts (single source of truth with the client).
 // Type-only import: erased at compile time, so dist/ has no runtime dependency.
-import type { Suit, Rank, Card, GameMode, GamePhase, GameConfig } from './shared-types';
+import type { Suit, Rank, Card, GameMode, GamePhase, GameConfig, GameSnapshot, PrivateGameState, LastAction } from './shared-types';
 
 type Player = {
   playerId: string;
@@ -15,6 +16,7 @@ type Player = {
   displayName: string;
   connected: boolean;
   disconnectedAt?: number;
+  isBot?: boolean; // seat driven by a server-side BotSocket (see "bots" below)
 };
 
 type GolfSlot = {
@@ -73,6 +75,9 @@ type GameState = {
   caboBlackKingPending?: Map<string, { targetPlayerId: string; targetSlotId: string }>;
   caboSnapGapPending?: Map<string, string>; // snapperId -> opponentId
   caboLeaderboard?: Array<{ playerId: string; displayName: string; score: number; rank: number }>;
+  // public move log (latest only)
+  lastAction?: LastAction;
+  actionSeq?: number;
 };
 
 const nano4 = customAlphabet('0123456789', 4);
@@ -94,7 +99,16 @@ const REAP_INTERVAL_MS = Number(process.env.REAP_INTERVAL_MS) || 1000 * 60 * 5; 
 function removeGame(state: GameState): void {
   codeToGameId.delete(state.code);
   games.delete(state.gameId);
-  for (const p of state.players.values()) tokenIndex.delete(p.playerToken);
+  for (const p of state.players.values()) {
+    tokenIndex.delete(p.playerToken);
+    if (p.isBot) disposeBot(p.currentSocketId);
+  }
+}
+
+// Bots never disconnect, so every "is anyone still here?" question is asked
+// about humans only — otherwise a room of bots would live (and play) forever.
+function humanPlayers(state: GameState): Player[] {
+  return Array.from(state.players.values()).filter((p) => !p.isBot);
 }
 
 // Returns the number of games removed. Pure w.r.t. `now` so it can be tested
@@ -102,7 +116,7 @@ function removeGame(state: GameState): void {
 function reapStaleGames(now: number = Date.now()): number {
   let removed = 0;
   for (const state of Array.from(games.values())) {
-    const players = Array.from(state.players.values());
+    const players = humanPlayers(state);
     const allGone = players.length === 0 || players.every((p) => !p.connected);
     if (!allGone) continue;
     // Most recent moment any player was still connected.
@@ -277,6 +291,7 @@ function dealGolfRound(state: GameState): void {
   state.peekPhaseActive = true;
   state.phase = 'peek';
   state.pendingDrawByPlayer = new Map<string, Card>();
+  state.lastAction = undefined;
 
   let dealIndex = 0;
   for (const pid of playerIds) {
@@ -392,6 +407,7 @@ function dealCaboRound(state: GameState): void {
   state.caboCallerId = undefined;
   state.caboFinalTurnsLeft = undefined;
   state.caboFinalQueue = undefined;
+  state.lastAction = undefined;
 
   let dealIndex = 0;
   for (const pid of playerIds) {
@@ -614,7 +630,36 @@ function emitToPlayer(io: Server, state: GameState, playerId: string, event: str
   if (!p?.currentSocketId) return;
   if (event === 'golf:hand') payload = privatePlayerState(state, playerId).golfSlots;
   if (event === 'cabo:hand') payload = privatePlayerState(state, playerId).caboSlots;
+  // Bots receive exactly what a browser in that seat would receive.
+  const bot = botSockets.get(p.currentSocketId);
+  if (bot) { bot.receive(event, payload); return; }
   io.to(p.currentSocketId).emit(event, payload);
+}
+
+// ---------- public move log ----------
+// One line describing the latest move, shown on every screen ("Ada took the
+// 3♠ from the discard"). Only name cards that are face up for everyone — the
+// discard pile, locked Golf cards, snapped cards — never a hidden card.
+const SUIT_SYMBOL: Record<Suit, string> = { spades: '♠', hearts: '♥', diamonds: '♦', clubs: '♣' };
+function cardName(card: Card): string {
+  return `${card.rank}${SUIT_SYMBOL[card.suit]}`;
+}
+// "a 9♥", "an 8♣", "an A♠"
+function aCard(card: Card): string {
+  return `${card.rank === 'A' || card.rank === '8' ? 'an' : 'a'} ${cardName(card)}`;
+}
+// "a 7", "an 8", "a Jack", "a Queen", "a King"
+function aRank(rank: Rank): string {
+  const word = ({ J: 'Jack', Q: 'Queen', K: 'King', A: 'Ace' } as Record<string, string>)[rank] ?? rank;
+  return `${rank === 'A' || rank === '8' ? 'an' : 'a'} ${word}`;
+}
+function logAction(state: GameState, actorId: string, kind: string, text: string, slotIds: string[] = []): void {
+  const name = state.players.get(actorId)?.displayName ?? 'A player';
+  state.actionSeq = (state.actionSeq ?? 0) + 1;
+  state.lastAction = { seq: state.actionSeq, actorId, kind, text: `${name} ${text}`, slotIds };
+}
+function nameOf(state: GameState, playerId: string): string {
+  return state.players.get(playerId)?.displayName ?? 'another player';
 }
 
 function broadcastSnapshot(io: Server, state: GameState) {
@@ -661,6 +706,7 @@ function removePlayer(io: Server, state: GameState, playerId: string) {
   state.extraDeck.unshift(...returned);
   state.players.delete(playerId);
   tokenIndex.delete(player.playerToken);
+  if (player.isBot) disposeBot(player.currentSocketId);
   state.golfHands?.delete(playerId); state.caboHands?.delete(playerId); state.hands.delete(playerId);
   state.pendingDrawByPlayer.delete(playerId); state.caboPendingDraw?.delete(playerId);
   state.roundScores.delete(playerId); state.caboRoundScores?.delete(playerId); state.caboCumulativeScores?.delete(playerId);
@@ -674,9 +720,11 @@ function removePlayer(io: Server, state: GameState, playerId: string) {
   if (state.turnOrder?.length) state.currentTurnIndex = oldGolfTurn === playerId ? Math.max(0, golfIdx) % state.turnOrder.length : Math.max(0, state.turnOrder.indexOf(oldGolfTurn!));
   if (state.caboTurnOrder?.length) state.caboCurrentTurnIndex = oldCaboTurn === playerId ? Math.max(0, caboIdx) % state.caboTurnOrder.length : Math.max(0, state.caboTurnOrder.indexOf(oldCaboTurn!));
   state.caboFinalQueue = state.caboFinalQueue?.filter(pid => pid !== playerId);
-  if (!state.players.size) { removeGame(state); return; }
-  if (!state.players.get(state.hostId)?.connected) state.hostId = Array.from(state.players.values()).find(p => p.connected)?.playerId ?? state.players.keys().next().value!;
-  state.notice = `${player.displayName} left the room.`;
+  const humans = humanPlayers(state);
+  if (!humans.length) { removeGame(state); return; }
+  const host = state.players.get(state.hostId);
+  if (!host?.connected || host.isBot) state.hostId = (humans.find(p => p.connected) ?? humans[0]).playerId;
+  if (!player.isBot) state.notice = `${player.displayName} left the room.`;
   if (state.players.size < 2 && state.status !== 'waiting') {
     state.status = 'waiting'; state.phase = 'waiting'; state.currentRound = 0; state.targetRounds = 0;
     state.golfHands = undefined; state.caboHands = undefined; state.extraDeck = []; state.discardPile = [];
@@ -819,7 +867,10 @@ function publicGameSnapshot(state: GameState, _viewingPlayerId?: string) {
       displayName: p.displayName,
       connected: p.connected,
       disconnectedAt: p.disconnectedAt,
+      isBot: !!p.isBot,
     })),
+    botsEnabled: true,
+    lastAction: state.lastAction ?? null,
     centerPile: state.centerPile,
     extraDeckCount: state.extraDeck.length,
     matchNumber: state.matchNumber ?? 0,
@@ -922,7 +973,11 @@ const io = new Server(server, { cors: { origin: ALLOWED_ORIGIN } });
 
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
-io.on('connection', (socket) => {
+io.on('connection', (socket) => attachSocketHandlers(socket));
+
+// Every seat — a browser tab or a server-side bot — runs through this one
+// function: same middleware, same validation, same handlers.
+function attachSocketHandlers(socket: Socket) {
   let currentGameId: string | null = null;
   let currentPlayerId: string | null = null;
 
@@ -1161,6 +1216,28 @@ io.on('connection', (socket) => {
     ack({ ok: true });
   });
 
+  // ---- Bots (host only, lobby only) ----
+
+  socket.on('addBot', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.hostId !== currentPlayerId) return ack({ error: 'Only the host can add bots' });
+    if (state.phase !== 'waiting') return ack({ error: 'Add bots before the match starts' });
+    if (state.players.size >= state.config.maxPlayers) return ack({ error: 'Game full' });
+    ack(addBotToGame(state));
+  });
+
+  socket.on('removeBot', (payload: { playerId: string }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.hostId !== currentPlayerId) return ack({ error: 'Only the host can remove bots' });
+    if (state.phase !== 'waiting') return ack({ error: 'Bots can only be removed in the lobby' });
+    const target = typeof payload.playerId === 'string' ? state.players.get(payload.playerId) : undefined;
+    if (!target?.isBot) return ack({ error: 'That player is not a bot' });
+    removePlayer(io, state, target.playerId);
+    ack({ ok: true });
+  });
+
   // ---- Golf actions ----
 
   socket.on('golf:ackPeek', (_: {}, ack: (res: any) => void) => {
@@ -1196,6 +1273,7 @@ io.on('connection', (socket) => {
     slot.revealed = true;
     slot.locked = true;
     state.discardPile[state.discardPile.length - 1] = old;
+    logAction(state, currentPlayerId, 'golf:swap-discard', `took the ${cardName(top)} from the discard, replacing ${aCard(old)}`, [slot.slotId]);
 
     advanceTurn(state);
     checkRoundEnd(io, state);
@@ -1216,6 +1294,7 @@ io.on('connection', (socket) => {
     const card = state.extraDeck.pop();
     if (!card) return ack({ error: 'No cards left' });
     state.pendingDrawByPlayer.set(currentPlayerId, card);
+    logAction(state, currentPlayerId, 'golf:draw', 'drew from the deck');
     broadcastSnapshot(io, state);
     ack({ ok: true, card });
   });
@@ -1242,6 +1321,7 @@ io.on('connection', (socket) => {
     slot.locked = true;
     state.discardPile.push(old);
     state.pendingDrawByPlayer.delete(currentPlayerId);
+    logAction(state, currentPlayerId, 'golf:keep-draw', `kept the drawn ${cardName(card)}, replacing ${aCard(old)}`, [slot.slotId]);
 
     advanceTurn(state);
     checkRoundEnd(io, state);
@@ -1269,6 +1349,7 @@ io.on('connection', (socket) => {
     slot.revealed = true;
     slot.locked = true;
     state.pendingDrawByPlayer.delete(currentPlayerId);
+    logAction(state, currentPlayerId, 'golf:reject-draw', `discarded the drawn ${cardName(card)} and flipped ${aCard(slot.card)}`, [slot.slotId]);
 
     advanceTurn(state);
     checkRoundEnd(io, state);
@@ -1358,6 +1439,7 @@ io.on('connection', (socket) => {
 
     if (!state.caboPendingDraw) state.caboPendingDraw = new Map();
     state.caboPendingDraw.set(currentPlayerId, card);
+    logAction(state, currentPlayerId, 'cabo:draw', 'drew from the deck');
 
     broadcastSnapshot(io, state);
     ack({ ok: true, card });
@@ -1386,6 +1468,7 @@ io.on('connection', (socket) => {
     state.caboPendingDraw!.delete(currentPlayerId);
     state.caboBlackKingPending?.delete(currentPlayerId);
     state.caboSnapGapPending?.delete(currentPlayerId);
+    logAction(state, currentPlayerId, 'cabo:place', `kept the drawn card, discarding ${aCard(old)}`, [slots[slotIdx].slotId]);
 
     emitToPlayer(io, state, currentPlayerId, 'cabo:hand', slots);
     caboEndTurn(io, state);
@@ -1405,6 +1488,7 @@ io.on('connection', (socket) => {
     state.discardPile.push(drawn);
     state.caboPendingDraw!.delete(currentPlayerId);
     state.caboSnapGapPending?.delete(currentPlayerId);
+    logAction(state, currentPlayerId, 'cabo:discard', `discarded the drawn ${cardName(drawn)}`);
 
     caboEndTurn(io, state);
     broadcastSnapshot(io, state);
@@ -1440,6 +1524,7 @@ io.on('connection', (socket) => {
 
       state.discardPile.push(drawn);
       state.caboPendingDraw!.delete(currentPlayerId);
+      logAction(state, currentPlayerId, 'cabo:peek', `used ${aRank(drawn.rank)} to peek at one of their cards`, [slot.slotId]);
 
       emitToPlayer(io, state, currentPlayerId, 'cabo:peekResult', { slotId: slot.slotId, card: slot.card });
       caboEndTurn(io, state);
@@ -1457,6 +1542,7 @@ io.on('connection', (socket) => {
 
       state.discardPile.push(drawn);
       state.caboPendingDraw!.delete(currentPlayerId);
+      logAction(state, currentPlayerId, 'cabo:spy', `used ${aRank(drawn.rank)} to spy on one of ${nameOf(state, payload.targetPlayerId)}'s cards`, [slot.slotId]);
 
       emitToPlayer(io, state, currentPlayerId, 'cabo:spyResult', {
         targetPlayerId: payload.targetPlayerId,
@@ -1486,6 +1572,7 @@ io.on('connection', (socket) => {
 
       state.discardPile.push(drawn);
       state.caboPendingDraw!.delete(currentPlayerId);
+      logAction(state, currentPlayerId, 'cabo:blind-swap', `used ${aRank(drawn.rank)} to swap one of their cards for one of ${nameOf(state, payload.targetPlayerId)}'s cards, sight unseen`, [ownSlot.slotId, targetSlot.slotId]);
 
       emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
       emitToPlayer(io, state, payload.targetPlayerId, 'cabo:hand', targetSlots);
@@ -1507,6 +1594,7 @@ io.on('connection', (socket) => {
         targetPlayerId: payload.targetPlayerId,
         targetSlotId: payload.targetSlotId,
       });
+      logAction(state, currentPlayerId, 'cabo:king-look', `is using a Black King to look at one of ${nameOf(state, payload.targetPlayerId)}'s cards`, [slot.slotId]);
 
       emitToPlayer(io, state, currentPlayerId, 'cabo:blackKingSeeResult', {
         targetPlayerId: payload.targetPlayerId,
@@ -1550,6 +1638,9 @@ io.on('connection', (socket) => {
 
       emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
       emitToPlayer(io, state, pending.targetPlayerId, 'cabo:hand', targetSlots);
+      logAction(state, currentPlayerId, 'cabo:king-swap', `looked at one of ${nameOf(state, pending.targetPlayerId)}'s cards and swapped it for one of theirs`, [ownSlot.slotId, targetSlot.slotId]);
+    } else {
+      logAction(state, currentPlayerId, 'cabo:king-pass', `looked at one of ${nameOf(state, pending.targetPlayerId)}'s cards and left it there`, [pending.targetSlotId]);
     }
 
     state.discardPile.push(drawn);
@@ -1583,6 +1674,7 @@ io.on('connection', (socket) => {
     slots[slotIdx] = { slotId: slots[slotIdx].slotId, card: top };
     state.discardPile[state.discardPile.length - 1] = old;
     state.caboSnapGapPending?.delete(currentPlayerId);
+    logAction(state, currentPlayerId, 'cabo:take-discard', `took the ${cardName(top)} from the discard, discarding ${aCard(old)}`, [slots[slotIdx].slotId]);
 
     emitToPlayer(io, state, currentPlayerId, 'cabo:hand', slots);
     caboEndTurn(io, state);
@@ -1602,6 +1694,7 @@ io.on('connection', (socket) => {
 
     state.caboCallerId = currentPlayerId;
     state.phase = 'cabo-called';
+    logAction(state, currentPlayerId, 'cabo:call', 'called Cabo! Everyone else gets one last turn.');
     const order = state.caboTurnOrder!;
     const index = order.indexOf(currentPlayerId);
     state.caboFinalQueue = [...order.slice(index + 1), ...order.slice(0, index)];
@@ -1642,16 +1735,19 @@ io.on('connection', (socket) => {
     if (targetCard.rank !== discardTop.rank) {
       // Wrong snap: draw 2 penalty cards
       const mySlots = state.caboHands.get(currentPlayerId)!;
+      let penalties = 0;
       for (let i = 0; i < 2; i++) {
         caboEnsureDrawPile(state);
         const penalty = state.extraDeck.pop();
         if (penalty) {
+          penalties++;
           mySlots.push({
             slotId: `${currentPlayerId}:r${state.currentRound}:pen${Date.now()}${i}`,
             card: penalty,
           });
         }
       }
+      logAction(state, currentPlayerId, 'cabo:wrong-snap', `snapped the wrong card${penalties ? ` and took ${penalties} penalty card${penalties === 1 ? '' : 's'}` : ''}`, penalties ? mySlots.slice(-penalties).map(s => s.slotId) : []);
       emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
       broadcastSnapshot(io, state);
       // `code` is the machine-readable contract; the client matches it (not the
@@ -1662,6 +1758,9 @@ io.on('connection', (socket) => {
     // Correct snap: remove card from target's hand
     targetSlots.splice(slotIdx, 1);
     state.discardPile.push(targetCard);
+    logAction(state, currentPlayerId, 'cabo:snap', payload.targetType === 'own'
+      ? `snapped their own ${cardName(targetCard)}!`
+      : `snapped ${nameOf(state, targetPlayerId)}'s ${cardName(targetCard)}!`);
 
     emitToPlayer(io, state, targetPlayerId, 'cabo:hand', targetSlots);
 
@@ -1694,9 +1793,11 @@ io.on('connection', (socket) => {
 
     const slidCard = mySlots[slotIdx];
     mySlots.splice(slotIdx, 1);
-    opponentSlots.push({ slotId: `${opponentId}:r${state.currentRound}:slid${Date.now()}`, card: slidCard.card });
+    const slidSlotId = `${opponentId}:r${state.currentRound}:slid${Date.now()}`;
+    opponentSlots.push({ slotId: slidSlotId, card: slidCard.card });
 
     state.caboSnapGapPending!.delete(currentPlayerId);
+    logAction(state, currentPlayerId, 'cabo:slide', `slid one of their cards into ${nameOf(state, opponentId)}'s hand`, [slidSlotId]);
 
     emitToPlayer(io, state, currentPlayerId, 'cabo:hand', mySlots);
     emitToPlayer(io, state, opponentId, 'cabo:hand', opponentSlots);
@@ -1789,19 +1890,283 @@ io.on('connection', (socket) => {
     state.peekAckByPlayer?.add(player.playerId); state.caboPeekAckByPlayer?.add(player.playerId);
     state.betweenRoundAckByPlayer.add(player.playerId); state.rematchAckByPlayer.add(player.playerId);
     if (state.hostId === player.playerId) {
-      const next = Array.from(state.players.values()).find(p => p.connected);
+      const next = humanPlayers(state).find(p => p.connected);
       if (next) { state.hostId = next.playerId; state.notice = `${next.displayName} is now the host.`; }
     }
     settleReadiness(io, state);
     broadcastSnapshot(io, state);
     setTimeout(() => {
       if (!games.has(state.gameId) || player.connected || player.disconnectedAt !== departedAt) return;
-      if (Array.from(state.players.values()).some(p => p.connected)) removePlayer(io, state, player.playerId);
+      // Only another *human* keeps the room going; a solo player with bots
+      // keeps their seat until they return (or the reaper's TTL expires).
+      if (humanPlayers(state).some(p => p.connected)) removePlayer(io, state, player.playerId);
     }, DISCONNECT_GRACE_MS).unref();
   });
+}
 
+// ---------- bots ----------
+// A bot is an ordinary seat whose "browser" is a BotSocket: an in-process
+// stand-in for a socket.io connection. attachSocketHandlers() registers the
+// same middleware and handlers on it as on a real socket, so a bot can only do
+// what a player can do (turn checks, phase checks, privacy all apply) and it
+// only learns what a player in its seat would see: game:update, game:private
+// and its own power results, routed to it by emitToPlayer(). No game rules are
+// duplicated here — just a small strategy that picks the next request.
+//
+// Bots act on a short timer so humans can follow along, hold still while no
+// human is connected, and are removed with the room (they never keep one alive).
 
-});
+const BOT_NAMES = ['Ada', 'Milo', 'Juno', 'Rex', 'Pip', 'Nova', 'Ziggy', 'Lulu'];
+const BOT_STEP_MS = Math.max(10, Number(process.env.BOT_STEP_MS) || 1100);
+const GOLF_UNSEEN_EV = 75 / 13; // average Golf value of a card we have not seen
+const CABO_UNSEEN_EV = 6;       // average Cabo value of a card we have not seen
+const botSockets = new Map<string, BotSocket>(); // BotSocket.id -> bot
+
+function disposeBot(socketId: string): void {
+  botSockets.get(socketId)?.dispose();
+}
+
+function pick<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function addBotToGame(state: GameState): { ok: true; playerId: string } | { error: string } {
+  const taken = new Set(Array.from(state.players.values()).map((p) => p.displayName));
+  const free = BOT_NAMES.map((n) => `Bot ${n}`).filter((n) => !taken.has(n));
+  const bot = new BotSocket();
+  botSockets.set(bot.id, bot);
+  attachSocketHandlers(bot as unknown as Socket);
+  // Joins through the public joinGame handler, exactly like a browser would.
+  let res: any = null;
+  bot.send('joinGame', { code: state.code, displayName: free.length ? pick(free) : 'Bot' }, (r) => { res = r; });
+  const player = res?.playerId ? state.players.get(res.playerId) : undefined;
+  if (!player) { bot.dispose(); return { error: res?.error ?? 'Could not add a bot' }; }
+  player.isBot = true;
+  bot.playerId = player.playerId;
+  broadcastSnapshot(io, state);
+  return { ok: true, playerId: player.playerId };
+}
+
+type BotMove = { event: string; payload: Record<string, unknown>; onOk?: () => void };
+
+// Golf estimate: known cards scored exactly (pairs, Kings…), unseen cards at average value.
+function golfEstimate(cards: Array<Card | null>): number {
+  const seen = cards.filter((c): c is Card => !!c);
+  return calculateGolfScore(seen.map((card) => ({ slotId: '', card, revealed: true, locked: true })))
+    + (cards.length - seen.length) * GOLF_UNSEEN_EV;
+}
+
+class BotSocket {
+  readonly id = `bot:${nanoPlayerId()}`;
+  playerId: string | null = null;
+  private handlers = new Map<string, (...args: any[]) => void>();
+  private middleware: Array<(packet: any[], next: (err?: Error) => void) => void> = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+  private failures = 0;
+  private snapshot: GameSnapshot | null = null;
+  private priv: PrivateGameState | null = null;
+  private known = new Map<string, Card>(); // own hidden cards this seat has legitimately seen
+  private memoryKey = '';
+  private lastSeq = 0;
+  private turnsThisRound = 0;
+
+  // -- the slice of socket.io's Socket that attachSocketHandlers() uses --
+  use(fn: (packet: any[], next: (err?: Error) => void) => void) { this.middleware.push(fn); return this; }
+  on(event: string, fn: (...args: any[]) => void) { this.handlers.set(event, fn); return this; }
+  join() { /* rooms are unused: emitToPlayer() routes to bots directly */ }
+  leave() { /* see join() */ }
+  emit() { return true; }
+  disconnect() { return this; }
+
+  // Client -> server: run the middleware chain, then the handler — as socket.io would.
+  send(event: string, payload: Record<string, unknown>, ack: (res: any) => void = () => {}): void {
+    const packet: any[] = [event, payload, ack];
+    const run = (i: number): void => {
+      if (i < this.middleware.length) { this.middleware[i](packet, (err) => { if (!err) run(i + 1); }); return; }
+      const handler = this.handlers.get(event);
+      if (!handler) { ack({ error: `Unknown event ${event}` }); return; }
+      handler(...packet.slice(1));
+    };
+    try { run(0); } catch (err) {
+      console.error(`[bot] ${event} threw`, err);
+      ack({ error: 'Bot action failed' });
+    }
+  }
+
+  // Server -> client: everything emitToPlayer() sends to this seat.
+  receive(event: string, payload: any): void {
+    if (this.disposed) return;
+    if (event === 'game:update') {
+      this.snapshot = payload as GameSnapshot;
+      const action = this.snapshot.lastAction;
+      if (action && action.seq !== this.lastSeq) {
+        this.lastSeq = action.seq;
+        // A rival's Jack/Queen or Black King swap replaced one of our cards with one we have not seen.
+        if (action.actorId !== this.playerId && (action.kind === 'cabo:blind-swap' || action.kind === 'cabo:king-swap')) {
+          for (const id of action.slotIds) this.known.delete(id);
+        }
+      }
+    } else if (event === 'game:private') {
+      const priv = payload as PrivateGameState;
+      const key = `${priv.gameId}:${priv.matchNumber}:${priv.round}`;
+      if (key !== this.memoryKey) { this.memoryKey = key; this.known.clear(); this.turnsThisRound = 0; }
+      this.priv = priv;
+      // Remember any own card the server chose to show us (the opening peek).
+      for (const s of priv.golfSlots) if (s.card && !s.locked) this.known.set(s.slotId, s.card);
+      for (const s of priv.caboSlots) if (s.card) this.known.set(s.slotId, s.card);
+    } else if (event === 'cabo:peekResult') {
+      this.known.set(payload.slotId, payload.card);
+      return;
+    } else {
+      return; // golf:hand / cabo:hand / results: the private state above already carries them
+    }
+    this.schedule();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    botSockets.delete(this.id);
+  }
+
+  private schedule(): void {
+    if (this.disposed || this.timer) return;
+    this.timer = setTimeout(() => { this.timer = null; this.act(); }, BOT_STEP_MS * (0.75 + Math.random() * 0.5));
+    this.timer.unref?.();
+  }
+
+  private act(): void {
+    const g = this.snapshot, priv = this.priv, me = this.playerId;
+    if (this.disposed || !g || !priv || !me) return;
+    // Nobody watching (the only human locked their phone): hold the table as it is.
+    if (!g.players.some((p) => !p.isBot && p.connected)) return;
+    const move = this.decide(g, priv, me);
+    if (!move) return;
+    this.send(move.event, move.payload, (res) => {
+      if (res?.error) {
+        // Retry with fresher state; after two misses decide() falls back to the plainest legal move.
+        this.failures++;
+        console.warn(`[bot] ${me} ${move.event} rejected: ${res.error}`);
+        if (this.failures <= 4) this.schedule();
+        return;
+      }
+      this.failures = 0;
+      move.onOk?.();
+    });
+  }
+
+  private decide(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {
+    const golf = g.config.gameMode === 'golf';
+    if (g.phase === 'peek') {
+      const acks = golf ? g.golf?.peekAcks : g.cabo?.peekAcks;
+      return acks?.includes(me) ? null : { event: golf ? 'golf:ackPeek' : 'cabo:ackPeek', payload: {} };
+    }
+    if (g.phase === 'between-rounds') {
+      return g.betweenRoundAcks?.includes(me) ? null : { event: golf ? 'golf:ackNextRound' : 'cabo:ackNextRound', payload: {} };
+    }
+    if (g.phase === 'rematch-pending') {
+      return g.rematchAcks?.includes(me) ? null : { event: golf ? 'golf:ackRematch' : 'cabo:ackRematch', payload: {} };
+    }
+    if ((g.phase === 'play' || g.phase === 'cabo-called') && !g.paused) {
+      if (golf && g.golf?.turn === me) return this.golfMove(g, priv, me);
+      if (!golf && g.cabo?.turn === me) return this.caboMove(g, priv, me);
+    }
+    return null;
+  }
+
+  private golfMove(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {
+    const hand = g.golf?.hands.find((h) => h.playerId === me);
+    if (!hand) return null;
+    const own = hand.slots.map((s) => ({ slotId: s.slotId, locked: s.locked, card: s.card ?? this.known.get(s.slotId) ?? null }));
+    const open = own.filter((s) => !s.locked);
+    if (!open.length) return null;
+    const safe = this.failures >= 2;
+    const estimate = (slotId?: string, card?: Card) => golfEstimate(own.map((s) => (s.slotId === slotId ? card! : s.card)));
+    const baseline = estimate();
+    const bestSlotFor = (card: Card) => open
+      .map((s) => ({ slotId: s.slotId, score: estimate(s.slotId, card) }))
+      .sort((a, b) => a.score - b.score)[0];
+
+    const drawn = priv.pendingDraw;
+    if (drawn) {
+      const best = bestSlotFor(drawn);
+      if (!safe && best.score < baseline - 0.5) return { event: 'golf:acceptDrawAndSwap', payload: { slotId: best.slotId } };
+      // Keep the drawn card out and lock a slot as it is: a card we know is good,
+      // else gamble on one we have not seen, else our least-bad known card.
+      const ranks = own.filter((s) => s.card).map((s) => s.card!.rank);
+      const flip = open.find((s) => s.card && (rankPointValue(s.card.rank) <= 3 || ranks.filter((r) => r === s.card!.rank).length > 1))
+        ?? open.find((s) => !s.card)
+        ?? [...open].sort((a, b) => rankPointValue(a.card!.rank) - rankPointValue(b.card!.rank))[0];
+      return { event: 'golf:rejectDrawAndReveal', payload: { slotId: flip.slotId } };
+    }
+    const top = g.discardTop;
+    if (top) {
+      const best = bestSlotFor(top);
+      if (safe || best.score <= baseline - 3) return { event: 'golf:swapWithDiscard', payload: { slotId: best.slotId } };
+    }
+    return { event: 'golf:draw', payload: {} };
+  }
+
+  private caboMove(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {
+    const ownIds = priv.caboSlots.map((s) => s.slotId);
+    for (const id of Array.from(this.known.keys())) if (!ownIds.includes(id)) this.known.delete(id);
+    const value = (id: string) => { const c = this.known.get(id); return c ? caboCardValue(c) : CABO_UNSEEN_EV; };
+    const worst: string | undefined = [...ownIds].sort((a, b) => value(b) - value(a))[0]; // our best slot to replace
+    const unseen = ownIds.filter((id) => !this.known.has(id));
+    const total = ownIds.reduce((sum, id) => sum + value(id), 0);
+    const rivals = (g.cabo?.hands ?? []).filter((h) => h.playerId !== me && h.slots.length > 0);
+    const rivalSlot = () => { const h = pick(rivals); return { targetPlayerId: h.playerId, targetSlotId: pick(h.slots).slotId }; };
+    const safe = this.failures >= 2;
+
+    const king = priv.blackKing;
+    if (king) {
+      if (!safe && worst && value(worst) - caboCardValue(king.card) >= 2) {
+        return { event: 'cabo:blackKingDecide', payload: { swap: true, ownSlotId: worst }, onOk: () => this.known.set(worst, king.card) };
+      }
+      return { event: 'cabo:blackKingDecide', payload: { swap: false } };
+    }
+
+    const drawn = priv.caboPendingDraw;
+    if (drawn) {
+      if (safe) return { event: 'cabo:discardDrawn', payload: {} };
+      if (worst && value(worst) - caboCardValue(drawn) >= 2) {
+        return { event: 'cabo:placeDrawn', payload: { slotId: worst }, onOk: () => this.known.set(worst, drawn) };
+      }
+      const power = getCaboSpecialAction(drawn);
+      if (power === 'peek-own' && unseen.length) {
+        return { event: 'cabo:useSpecialPower', payload: { action: 'peek-own', ownSlotId: unseen[0] } };
+      }
+      if (rivals.length && power === 'spy') {
+        return { event: 'cabo:useSpecialPower', payload: { action: 'spy', ...rivalSlot() } };
+      }
+      if (rivals.length && power === 'black-king-see') {
+        return { event: 'cabo:useSpecialPower', payload: { action: 'black-king-see', ...rivalSlot() } };
+      }
+      if (rivals.length && power === 'blind-swap') {
+        const high = ownIds.filter((id) => this.known.has(id) && value(id) >= 8).sort((a, b) => value(b) - value(a))[0];
+        if (high) {
+          return { event: 'cabo:useSpecialPower', payload: { action: 'blind-swap', ownSlotId: high, ...rivalSlot() }, onOk: () => this.known.delete(high) };
+        }
+      }
+      return { event: 'cabo:discardDrawn', payload: {} };
+    }
+
+    // Start of our turn. Call Cabo once the hand looks low enough; the bar
+    // drops as the round drags on, so a round with bots always ends.
+    const patience = Math.max(0, this.turnsThisRound - 3);
+    const confident = unseen.length <= 1 || this.turnsThisRound >= 8;
+    if (!safe && g.phase === 'play' && ((confident && total <= 4 + patience * 1.5) || this.turnsThisRound >= 14)) {
+      return { event: 'cabo:callCabo', payload: {} };
+    }
+    const top = g.discardTop;
+    if (top && worst && (safe || (caboCardValue(top) <= 3 && value(worst) - caboCardValue(top) >= 3))) {
+      return { event: 'cabo:takeDiscard', payload: { slotId: worst }, onOk: () => { this.known.set(worst, top); this.turnsThisRound++; } };
+    }
+    return { event: 'cabo:draw', payload: {}, onOk: () => { this.turnsThisRound++; } };
+  }
+}
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
