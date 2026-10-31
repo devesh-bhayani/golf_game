@@ -22,12 +22,13 @@ npm run build          # tsc -b && vite build → dist/
 
 # tests (CARDS/server/) — ALL need a server already running on :3001 (or SERVER_URL=...)
 # Start it with the full test env so every suite passes:
-#   TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700 npm run dev
+#   TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700 BOT_STEP_MS=60 npm run dev
 npm run test:dealing && npm run test:dealing:golf
 npm run test:reaper && npm run test:validation    # reaper needs the short-TTL envs
 npm run e2e && npm run e2e:golf && npm run e2e:cabo
 npm run e2e:cabo:specials   # needs TEST_HOOKS=1 on the server or this times out
 npm run test:release       # complete matches, privacy, reconnects, tie-breaks
+npm run test:bots          # bot seats: lobby controls, full Golf/Cabo rounds, pause, cleanup
 ```
 
 CI: `.github/workflows/test.yml` runs all suites + both builds on every push/PR.
@@ -64,6 +65,8 @@ Keep it that way. Don't split files or add dependencies without being asked.
 - **`cardsPerPlayer` is mode-dependent**: golf ∈ {4,6,8}, cabo = always 4, classic 1–13.
 - **`config.numberOfDecks` from the client is ignored** — recomputed by `decksNeeded()` at deal time. Preserve that invariant in any dealer change.
 - **Hidden own cards are masked by the server.** `game:private` restores authorized slots and pending decisions; `golf:hand`/`cabo:hand` are masked compatibility events. Only the authorized initial peek, drawn card, power result, and final reveal may carry values. Never restore full hidden hands to clients.
+- **Bots are ordinary seats.** `addBot` joins a `BotSocket` (in-process stand-in for a socket.io connection) through the real `joinGame` handler; `attachSocketHandlers()` gives it the same middleware/handlers as a browser, and `emitToPlayer()` routes its events to it. Bots therefore obey every turn/phase/privacy rule and only see what a player in that seat sees. Never give bot code a shortcut into `GameState` for decisions, and never let a bot keep a room alive: lifetime checks (reaper, grace removal, host transfer, "last player left") use `humanPlayers()`. `BOT_STEP_MS` sets the bot think time (default 900 ms).
+- **`lastAction` is public.** The move log (`logAction`) may only name cards already face up for everyone (discard, locked Golf cards, snapped cards). Never describe a hidden card there.
 - **Classic mode is hidden from the create screen** (half-finished; GAPS.md #1). Server handlers remain for rejoin safety.
 
 ## Rules

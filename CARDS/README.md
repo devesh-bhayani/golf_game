@@ -35,6 +35,8 @@ Seats are stored per browser tab and survive refreshes. Separate tabs can join a
 - A disconnected player has 30 seconds to return. The host role transfers to a connected player immediately. If someone stays online, an absent player leaves after the grace period.
 - Play pauses with fewer than two connected players. If fewer than two players remain in the room, it returns to the lobby.
 - Leaving a running match forfeits your seat.
+- The host can add bots in the lobby (up to the 8-seat limit), so one person can play alone or fill out a small table. Bots follow the same rules and see only what a player in their seat would see. They pause while no human is connected, and a room closes when its last human leaves.
+- A "Last move" line under the table header says what just happened (for example "Bot Ada took the 3♠ from the discard"), and the touched cards get a dashed outline.
 - Classic is retained only for compatibility; it is not offered in the public interface.
 
 ## Tests
@@ -42,7 +44,7 @@ Seats are stored per browser tab and survive refreshes. Separate tabs can join a
 Start a separate test server from `CARDS/server`:
 
 ```sh
-TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700 npm run dev
+TEST_HOOKS=1 GAME_TTL_MS=1500 REAP_INTERVAL_MS=700 BOT_STEP_MS=60 npm run dev
 ```
 
 Then, from `CARDS/server`, run these sequentially:
@@ -57,13 +59,16 @@ npm run e2e:golf
 npm run e2e:cabo
 npm run e2e:cabo:specials
 npm run test:release
+npm run test:bots
 ```
 
 Tests accept `SERVER_URL` for a different test server. The test-hook server must not be shared with normal players; deterministic-deck suites must run sequentially.
 
 `test:release` covers hidden own-card privacy, refresh without re-peeking, one connection per seat, invalid actions, duplicate draws, disconnect readiness, host transfer, forfeits, complete Golf and Cabo matches/rematches, Golf tie-break rounds, eight-player/eight-card Golf, and a Black King decision restored after reconnect.
 
-CI runs all nine suites and both production builds. The existing script tests do not replace final browser and real-device checks.
+`test:bots` covers lobby bot controls, full Golf and Cabo rounds against bots, public-snapshot privacy, bots pausing while the only human is away, and room cleanup.
+
+CI runs all ten suites and both production builds. The existing script tests do not replace final browser and real-device checks.
 
 ## Production builds
 

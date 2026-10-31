@@ -227,7 +227,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
     <div style={{ padding: 'clamp(18px, 4vw, 32px)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
         <h2 id={titleId} style={{ margin: 0, fontFamily: theme.typography.fontFamilyDisplay, fontSize: 28 }}>{title}</h2>
-        {onClose && <Btn variant="ghost" size="sm" onClick={onClose} aria-label="Close guide">Close ✕</Btn>}
+        {onClose && <Btn variant="ghost" size="sm" onClick={onClose} aria-label="Close">Close ✕</Btn>}
       </div>
       {children}
     </div>
@@ -247,7 +247,7 @@ function RulesGuide({ initialMode, onClose }: { initialMode: 'golf' | 'cabo'; on
     </p>
     <p style={{ color: theme.colors.dark[300] }}>2–8 players · No accounts · These are our house rules.</p>
     <ol style={{ paddingLeft: 22, lineHeight: 1.85 }}>
-      <li><strong>Get everyone in.</strong> One person creates the room. Friends open the invite link or enter its four-digit code and their name. The host starts when everyone is present.</li>
+      <li><strong>Get everyone in.</strong> One person creates the room. Friends open the invite link or enter its four-digit code and their name. The host starts when everyone is present. Short on players? The host can add bots in the lobby.</li>
       <li><strong>Take one peek.</strong> {golf ? 'Remember your bottom row of cards.' : 'Remember your bottom two cards.'} Select “Got it — hide cards” when ready. You cannot peek again by refreshing.</li>
       <li><strong>Watch the turn marker.</strong> {golf ? 'Select a hidden card, then take the discard to replace it. Or draw from the deck: keep it and replace a hidden card, or discard it and reveal a hidden card. Either choice locks that slot.' : 'Take the discard to replace a card, or draw from the deck. Place the drawn card, discard it, or use its power. Your other cards stay hidden.'}</li>
       <li><strong>{golf ? 'Finish the round.' : 'Call Cabo.'}</strong> {golf ? 'When every card is locked face up, scores are added. Select Ready for the next round.' : 'Call before drawing on your turn. Every other player gets one last turn, then the round is scored.'}</li>
@@ -291,7 +291,7 @@ function FirstGameGuide({ onRules }: { onRules: () => void }) {
     <h2 id="first-game-heading" style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: 26, marginBottom: 8 }}>Your first game starts here</h2>
     <p style={{ color: theme.colors.dark[300], lineHeight: 1.6 }}>New to Golf or Cabo? Both are memory games where <strong>the lowest score wins.</strong></p>
     <div className="guide-grid">
-      {[["01", "Make a room", "Choose Golf for a simple start, or Cabo for special powers."], ["02", "Bring your friends", "Share the invite link. Everyone joins from their own phone or laptop."], ["03", "Peek, play, repeat", "Remember your cards, take turns, and see who finishes with the fewest points."]].map(([n, title, text]) => <div key={n} style={{ padding: 16, background: theme.colors.dark[800], border: `1px solid ${theme.colors.dark[700]}`, borderRadius: 14 }}>
+      {[["01", "Make a room", "Choose Golf for a simple start, or Cabo for special powers."], ["02", "Bring your friends", "Share the invite link so everyone joins from their own phone or laptop. Alone? Add bots and play right away."], ["03", "Peek, play, repeat", "Remember your cards, take turns, and see who finishes with the fewest points."]].map(([n, title, text]) => <div key={n} style={{ padding: 16, background: theme.colors.dark[800], border: `1px solid ${theme.colors.dark[700]}`, borderRadius: 14 }}>
         <span style={{ color: theme.colors.primary[400], fontSize: 13 }}>{n}</span><h3 style={{ margin: '8px 0' }}>{title}</h3><p style={{ color: theme.colors.dark[300], lineHeight: 1.6, margin: 0, fontSize: 14 }}>{text}</p>
       </div>)}
     </div>
@@ -390,8 +390,13 @@ function CardBack({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
 
 // ---- Golf Slot ----
 
-function SlotView({ slot, selectable, selected, onSelect, cardSize = 'md' }: {
-  slot: GolfSlotT; selectable: boolean; selected: boolean; onSelect: () => void; cardSize?: 'sm' | 'md';
+// Dashed ring on the slots the latest move touched, so a move made by someone
+// else (or a bot) can be followed at a glance.
+const recentRing = (recent?: boolean): React.CSSProperties =>
+  recent ? { outline: `2px dashed ${theme.colors.primary[300]}`, outlineOffset: 3 } : {};
+
+function SlotView({ slot, selectable, selected, onSelect, cardSize = 'md', recent = false }: {
+  slot: GolfSlotT; selectable: boolean; selected: boolean; onSelect: () => void; cardSize?: 'sm' | 'md'; recent?: boolean;
 }) {
   const prevLocked = useRef(slot.locked);
   const [flipping, setFlipping] = useState(false);
@@ -415,7 +420,7 @@ function SlotView({ slot, selectable, selected, onSelect, cardSize = 'md' }: {
 
   return (
     <button type="button" aria-label={slot.card ? `${slot.card.rank} of ${slot.card.suit}, locked` : `Select hidden card ${Number(slot.slotId.split(':s')[1]) + 1}`} aria-pressed={selected} disabled={!selectable} className={classes} onClick={onSelect}
-      style={{ background: 'transparent', color: 'inherit', cursor: selectable ? 'pointer' : 'default', border: `2px solid ${borderColor}`, borderRadius: theme.borderRadius.lg, padding: 2, transition: 'border-color 0.25s' }}>
+      style={{ background: 'transparent', color: 'inherit', cursor: selectable ? 'pointer' : 'default', border: `2px solid ${borderColor}`, borderRadius: theme.borderRadius.lg, padding: 2, transition: 'border-color 0.25s', ...recentRing(recent) }}>
       {showCard && slot.card ? <CardView card={slot.card} size={cardSize} /> : <CardBack size={cardSize} />}
     </button>
   );
@@ -423,7 +428,7 @@ function SlotView({ slot, selectable, selected, onSelect, cardSize = 'md' }: {
 
 // ---- Cabo Slot ----
 
-function CaboSlotView({ card, selectable, selected, snapTarget, onSelect, cardSize = 'md', showFaceUp = false, label = 'Select hidden card' }: {
+function CaboSlotView({ card, selectable, selected, snapTarget, onSelect, cardSize = 'md', showFaceUp = false, label = 'Select hidden card', recent = false }: {
   card: CardT | null;
   selectable: boolean;
   selected: boolean;
@@ -432,6 +437,7 @@ function CaboSlotView({ card, selectable, selected, snapTarget, onSelect, cardSi
   cardSize?: 'sm' | 'md';
   showFaceUp?: boolean;
   label?: string;
+  recent?: boolean;
 }) {
   let borderColor = theme.colors.dark[600];
   if (selected) borderColor = theme.colors.primary[500];
@@ -452,9 +458,41 @@ function CaboSlotView({ card, selectable, selected, snapTarget, onSelect, cardSi
         borderRadius: theme.borderRadius.lg,
         padding: 2,
         transition: 'border-color 0.25s',
+        ...recentRing(recent),
       }}>
       {showFaceUp && card ? <CardView card={card} size={cardSize} /> : <CardBack size={cardSize} />}
     </button>
+  );
+}
+
+// ---- Last move line ----
+
+// The server phrases moves in the third person ("Ada drew from the deck").
+// Rephrase for the viewer when the move is theirs or targets them.
+function describeLastMove(game: GameSnapshot, playerId: string | null): string | null {
+  const action = game.lastAction;
+  if (!action) return null;
+  const me = game.players.find((p) => p.playerId === playerId);
+  let text = action.text;
+  if (me && action.actorId === me.playerId && text.startsWith(me.displayName)) {
+    text = 'You' + text.slice(me.displayName.length)
+      .replace(/^ is /, ' are ')
+      .replace(/\btheirs\b/g, 'yours')
+      .replace(/\btheir\b/g, 'your');
+  } else if (me) {
+    text = text.split(`${me.displayName}'s`).join('your');
+  }
+  return text;
+}
+
+function LastMove({ game, playerId }: { game: GameSnapshot; playerId: string | null }) {
+  const text = describeLastMove(game, playerId);
+  if (!text) return null;
+  return (
+    <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200], minHeight: 20 }}>
+      <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 999, background: theme.colors.primary[500], flexShrink: 0 }} />
+      <span><span style={{ color: theme.colors.dark[400] }}>Last move · </span>{text}</span>
+    </div>
   );
 }
 
@@ -504,6 +542,14 @@ function CountUp({ target, duration = 900 }: { target: number; duration?: number
 
 // ---- Golf Round score modal ----
 
+// Results actions stay pinned to the bottom of the dialog, so Ready is never
+// below the fold on a short laptop screen or with a full table.
+const modalActions: React.CSSProperties = {
+  display: 'flex', gap: theme.spacing.md, justifyContent: 'flex-end', flexWrap: 'wrap',
+  position: 'sticky', bottom: 0, background: theme.colors.dark[800],
+  padding: '12px 0 4px', borderTop: `1px solid ${theme.colors.dark[700]}`,
+};
+
 function RoundScoreModal({
   game, playerId, phase, onAckNextRound, onAckRematch, onLeave, onUpdateConfig, isHost, scoreDetails, onRules,
 }: {
@@ -523,11 +569,8 @@ function RoundScoreModal({
   return (
     <>
       {isEnd && <Confetti />}
-      <Modal title={isEnd ? 'Match results' : 'Round results'}>
-        <Panel style={{ padding: 12, maxWidth: 640, width: '100%', maxHeight: '90vh', overflowY: 'auto' }} className="fade-in">
-          <h2 style={{ margin: '0 0 1rem', fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], fontSize: theme.typography.fontSize['2xl'] }}>
-            {isEnd ? 'Game over' : `Round ${game.currentRound} complete`}
-          </h2>
+      <Modal title={isEnd ? 'Game over' : `Round ${game.currentRound} complete`}>
+        <div className="fade-in">
           {game.notice && <p role="status" style={{ color: theme.colors.primary[300] }}>{game.notice}</p>}
           <details style={{ marginBottom: 20 }}><summary style={{ cursor: 'pointer', padding: '10px 0' }}>Why your hand scored {scoreDetails.reduce((sum, item) => sum + item.points, 0)}</summary>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '12px 0' }}>{game.golf?.hands.find(h => h.playerId === playerId)?.slots.map(slot => slot.card && <CardView key={slot.slotId} card={slot.card} size="sm" />)}</div>
@@ -615,14 +658,14 @@ function RoundScoreModal({
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: theme.spacing.md, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={modalActions}>
             <Btn variant="ghost" onClick={onRules}>Rules & how to play</Btn>
             <Btn variant="outline" onClick={onLeave}>Leave room</Btn>
             <Btn variant="success" onClick={isBetween ? onAckNextRound : onAckRematch} disabled={alreadyAcked}>
               {alreadyAcked ? 'Waiting…' : isEnd ? 'Play Again' : 'Ready'}
             </Btn>
           </div>
-        </Panel>
+        </div>
       </Modal>
     </>
   );
@@ -631,10 +674,11 @@ function RoundScoreModal({
 // ---- Cabo Score Modal ----
 
 function CaboScoreModal({
-  game, playerId, phase, onAckNextRound, onAckRematch, onLeave, onRules,
+  game, playerId, phase, onAckNextRound, onAckRematch, onLeave, onRules, myHand, myHandTotal,
 }: {
   game: GameSnapshot; playerId: string | null; phase: GamePhase;
   onAckNextRound: () => void; onAckRematch: () => void; onLeave: () => void; onRules: () => void;
+  myHand: CaboSlotPrivate[]; myHandTotal: number | null;
 }) {
   const isBetween = phase === 'between-rounds';
   const isEnd = phase === 'rematch-pending';
@@ -643,15 +687,30 @@ function CaboScoreModal({
   const playerOrder = game.players;
   const roundCount = game.caboRoundScores ? Math.max(...game.caboRoundScores.map((r) => r.scores.length), 0) : 0;
   const winners = isEnd ? game.caboLeaderboard?.filter((e) => e.rank === 1) : [];
+  const myScores = game.caboRoundScores?.find((r) => r.playerId === playerId)?.scores ?? [];
+  const myRoundScore = myScores[myScores.length - 1];
+  const iCalled = game.cabo?.caboCallerId === playerId;
+  const shownCards = myHand.filter((s): s is { slotId: string; card: CardT } => !!s.card);
 
   return (
     <>
       {isEnd && <Confetti />}
-      <Modal title={isEnd ? 'Match results' : 'Round results'}>
-        <Panel style={{ padding: 12, maxWidth: 640, width: '100%', maxHeight: '90vh', overflowY: 'auto' }} className="fade-in">
-          <h2 style={{ margin: '0 0 1rem', fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], fontSize: theme.typography.fontSize['2xl'] }}>
-            {isEnd ? 'Game over' : `Round ${game.currentRound} complete`}
-          </h2>
+      <Modal title={isEnd ? 'Game over' : `Round ${game.currentRound} complete`}>
+        <div className="fade-in">
+          {myHandTotal !== null && shownCards.length === myHand.length && (
+            <details style={{ marginBottom: 20 }}>
+              <summary style={{ cursor: 'pointer', padding: '10px 0' }}>Your final hand added up to {myHandTotal}</summary>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '12px 0' }}>
+                {shownCards.length ? shownCards.map((s) => <CardView key={s.slotId} card={s.card} size="sm" hover={false} />) : <span style={{ color: theme.colors.dark[300] }}>No cards left — every one was snapped.</span>}
+              </div>
+              <p style={{ lineHeight: 1.6, margin: '0 0 8px' }}>
+                {myRoundScore === 0 ? 'Lowest hand at the table, so it scores 0 this round.'
+                  : iCalled ? `You called Cabo without the lowest hand: ${myHandTotal} + 5 = ${myRoundScore}.`
+                  : `Not the lowest hand, so it scores ${myRoundScore}.`}
+              </p>
+              <p style={{ color: theme.colors.dark[300], margin: 0 }}>Ace 0 · Red King −1 · Jack, Queen and Black King 10 · other cards face value.</p>
+            </details>
+          )}
           {isEnd && winners && winners.length > 0 && (
             <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: 'rgba(209, 168, 69, 0.12)', border: `1px solid ${theme.colors.primary[700]}`, borderRadius: theme.borderRadius.lg }}>
               <span style={{ color: theme.colors.primary[400], fontWeight: 700 }}>
@@ -715,20 +774,33 @@ function CaboScoreModal({
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: theme.spacing.md, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={modalActions}>
             <Btn variant="ghost" onClick={onRules}>Rules & how to play</Btn>
             <Btn variant="outline" onClick={onLeave}>Leave room</Btn>
             <Btn variant="success" onClick={isBetween ? onAckNextRound : onAckRematch} disabled={alreadyAcked}>
               {alreadyAcked ? 'Waiting…' : isEnd ? 'Play Again' : 'Ready'}
             </Btn>
           </div>
-        </Panel>
+        </div>
       </Modal>
     </>
   );
 }
 
 // ---- Golf table ----
+
+// On phones the turn controls stay on screen while you scroll the table.
+const stickyTurnPanel: React.CSSProperties = {
+  position: 'sticky', bottom: 8, zIndex: 5,
+  border: `1px solid ${theme.colors.primary[700]}`, boxShadow: theme.shadows.xl,
+};
+
+// Your own hand first, then everyone else in turn order (a rotation, so the
+// seating order around the table is unchanged).
+function rotateToMe<T extends { playerId: string }>(hands: T[], playerId: string | null): T[] {
+  const i = hands.findIndex((h) => h.playerId === playerId);
+  return i > 0 ? [...hands.slice(i), ...hands.slice(0, i)] : hands;
+}
 
 function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendingDraw, selectedSlotId, setSelectedSlotId }: {
   game: GameSnapshot; playerId: string | null;
@@ -758,6 +830,12 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
   const perRow = Math.floor((game.config.cardsPerPlayer || 4) / 2);
   const peekActive = game.golf?.peekPhaseActive !== false;
   const emit = (event: string, payload: any, cb?: (r: any) => void) => request(socket, event, payload, cb);
+  // Hands sit side by side on wider screens: one hand is `perRow` slots wide
+  // (card + padding + border) plus the turn highlight's padding.
+  const handPad = isMobile ? 8 : 12;
+  const handMinWidth = perRow * ((cardSize === 'sm' ? 60 : 80) + 8) + (perRow - 1) * cardGap + 2 * handPad + 4;
+  const showTotals = (game.roundScores ?? []).some((r) => r.scores.length > 0);
+  const recentSlots = game.lastAction?.slotIds ?? [];
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -798,9 +876,10 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
       )}
 
       {peekActive && (peekAcked || game.golf?.peekAcks?.includes(playerId ?? '')) && <Panel role="status" style={{ padding: 20 }}>Your cards are hidden. Waiting for the other players…</Panel>}
+      {!peekActive && <LastMove game={game} playerId={playerId} />}
       {!peekActive && (
-        <div style={{ display: 'grid', gap: 20, maxHeight: isMobile ? 'none' : 'calc(100vh - 260px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
-          {game.golf?.hands.map((h) => {
+        <div style={{ display: 'grid', gap: isMobile ? 10 : 20, gridTemplateColumns: `repeat(auto-fill, minmax(${handMinWidth}px, 1fr))`, alignItems: 'start', maxHeight: isMobile ? 'none' : 'calc(100vh - 290px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
+          {rotateToMe(game.golf?.hands ?? [], playerId).map((h) => {
             const player = game.players.find((p) => p.playerId === h.playerId);
             const isMe = h.playerId === playerId;
             const isTurn = h.playerId === game.golf?.turn;
@@ -812,22 +891,22 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
             const isHost = playerId === game.hostId;
 
             return (
-              <div key={h.playerId} style={{ opacity: disconnected ? 0.7 : 1, padding: isTurn ? 12 : 0, borderRadius: isTurn ? theme.borderRadius.xl : 0, border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent', boxShadow: isTurn && isMe ? theme.shadows.glow : 'none', transition: 'all 0.3s ease-in-out' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div key={h.playerId} style={{ opacity: disconnected ? 0.7 : 1, padding: handPad, borderRadius: theme.borderRadius.xl, border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent', boxShadow: isTurn && isMe ? theme.shadows.glow : 'none', transition: 'all 0.3s ease-in-out' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, color: isMe ? theme.colors.primary[400] : theme.colors.dark[200] }}>{player?.displayName}{isMe ? ' (you)' : ''}</span>
                   {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.bold, background: theme.colors.primary[500], color: '#1d1607', padding: '2px 10px', borderRadius: 999 }}>Turn</span>}
                   {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, background: theme.colors.warning[600], color: '#f5f4ec', padding: '2px 10px', borderRadius: 999 }}>Waiting…</span>}
                   {disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}><span style={{ display: 'inline-block', width: 10, height: 10, border: `2px solid ${theme.colors.dark[500]}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: 4 }} />disconnected</span>}
-                  {running !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{running} pts</span>}
+                  {showTotals && running !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{running} pts</span>}
                   {isHost && !isMe && disconnected && !graceElapsed && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>kick in {kickSecondsLeft}s</span>}
                   {isHost && !isMe && disconnected && graceElapsed && <Btn size="sm" variant="error" onClick={() => emit('golf:kickPlayer', { playerId: h.playerId }, (r: any) => { if (r?.error) notify(r.error); })}>Kick</Btn>}
                 </div>
-                <div style={{ overflowX: 'auto' }}>
+                <div style={{ overflowX: 'auto', padding: 5, margin: -5 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, auto)`, gap: cardGap, width: 'fit-content' }}>
-                    {h.slots.slice(0, perRow).map((s) => <SlotView key={s.slotId} slot={s} selectable={!!(isMe && isMyTurn && !s.locked)} selected={selectedSlotId === s.slotId} onSelect={() => setSelectedSlotId(s.slotId)} cardSize={cardSize} />)}
+                    {h.slots.slice(0, perRow).map((s) => <SlotView key={s.slotId} slot={s} selectable={!!(isMe && isMyTurn && !s.locked)} selected={selectedSlotId === s.slotId} onSelect={() => setSelectedSlotId(s.slotId)} cardSize={cardSize} recent={recentSlots.includes(s.slotId)} />)}
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, auto)`, gap: cardGap, marginTop: cardGap, width: 'fit-content' }}>
-                    {h.slots.slice(perRow).map((s) => <SlotView key={s.slotId} slot={s} selectable={!!(isMe && isMyTurn && !s.locked)} selected={selectedSlotId === s.slotId} onSelect={() => setSelectedSlotId(s.slotId)} cardSize={cardSize} />)}
+                    {h.slots.slice(perRow).map((s) => <SlotView key={s.slotId} slot={s} selectable={!!(isMe && isMyTurn && !s.locked)} selected={selectedSlotId === s.slotId} onSelect={() => setSelectedSlotId(s.slotId)} cardSize={cardSize} recent={recentSlots.includes(s.slotId)} />)}
                   </div>
                 </div>
               </div>
@@ -837,25 +916,25 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
       )}
 
       {isMyTurn && !peekActive && (
-        <Panel style={{ padding: theme.spacing['2xl'] }}>
+        <Panel style={{ padding: isMobile ? theme.spacing.lg : theme.spacing['2xl'], ...(isMobile ? stickyTurnPanel : {}) }}>
           <div style={{ fontWeight: 600, color: theme.colors.primary[400], marginBottom: 12 }}>Your turn</div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             {!pendingDraw && (
               <>
-                <Btn onClick={() => { if (!selectedSlotId) return notify('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
-                <Btn variant="outline" disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
+                <Btn size={isMobile ? 'sm' : 'md'} onClick={() => { if (!selectedSlotId) return notify('Select a slot first'); emit('golf:swapWithDiscard', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setSelectedSlotId(null); }); }} disabled={!game.discardTop}>Swap with discard</Btn>
+                <Btn variant="outline" size={isMobile ? 'sm' : 'md'} disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => { setDeckShaking(true); setTimeout(() => setDeckShaking(false), 500); emit('golf:draw', {}, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(r.card); }); }}>Draw from deck</Btn>
               </>
             )}
             {pendingDraw && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ color: theme.colors.dark[300] }}>Drawn:</span>
-                <CardView card={pendingDraw} />
-                <Btn variant="success" onClick={() => { if (!selectedSlotId) return notify('Select a slot to swap'); emit('golf:acceptDrawAndSwap', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Accept & swap</Btn>
-                <Btn variant="warning" onClick={() => { if (!selectedSlotId) return notify('Select a slot to reveal'); emit('golf:rejectDrawAndReveal', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Reject & reveal</Btn>
+                <CardView card={pendingDraw} size={isMobile ? 'sm' : 'md'} hover={false} />
+                <Btn variant="success" size={isMobile ? 'sm' : 'md'} onClick={() => { if (!selectedSlotId) return notify('Select a slot to swap'); emit('golf:acceptDrawAndSwap', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Accept & swap</Btn>
+                <Btn variant="warning" size={isMobile ? 'sm' : 'md'} onClick={() => { if (!selectedSlotId) return notify('Select a slot to reveal'); emit('golf:rejectDrawAndReveal', { slotId: selectedSlotId }, (r: any) => { if (r?.error) return notify(r.error); setPendingDraw(null); setSelectedSlotId(null); }); }}>Reject & reveal</Btn>
               </div>
             )}
           </div>
-          {!selectedSlotId && <p style={{ margin: '8px 0 0', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[500] }}>Click one of your face-down cards to select a slot</p>}
+          {!selectedSlotId && <p style={{ margin: '8px 0 0', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>Click one of your face-down cards to select a slot</p>}
         </Panel>
       )}
     </div>
@@ -967,6 +1046,14 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
   const hasPendingDraw = !!pendingDraw;
   const hasBlackKingPending = cabo?.blackKingPlayers?.includes(playerId ?? '') ?? false;
+  // Start of my turn (nothing drawn yet): my cards are selectable as the target for "Take discard".
+  const choosingDiscardSlot = isMyTurn && !hasPendingDraw && !hasBlackKingPending && specialMode === 'none' && !snapMode && !snapGap
+    && (phase === 'play' || phase === 'cabo-called') && !!game.discardTop;
+  const [confirmCabo, setConfirmCabo] = useState(false);
+  const handPad = isMobile ? 8 : 12;
+  const handMinWidth = 2 * ((cardSize === 'sm' ? 60 : 80) + 8) + cardGap + 2 * handPad + 4;
+  const showTotals = (game.caboRoundScores ?? []).some((r) => r.scores.length > 0);
+  const recentSlots = game.lastAction?.slotIds ?? [];
 
   const emit = (event: string, payload: any, cb?: (r: any) => void) => request(socket, event, payload, cb);
 
@@ -1128,6 +1215,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
       )}
 
       {peekActive && (peekAcked || game.cabo?.peekAcks?.includes(playerId ?? '')) && <Panel role="status" style={{ padding: 20 }}>Your cards are hidden. Waiting for the other players…</Panel>}
+      {!peekActive && <LastMove game={game} playerId={playerId} />}
       {/* Snap mode hint */}
       {snapMode && (
         <Panel style={{ padding: theme.spacing.lg, background: `${theme.colors.error[600]}22`, border: `1px solid ${theme.colors.error[500]}` }}>
@@ -1210,15 +1298,15 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
       {/* Main table: all players */}
       {!peekActive && (
-        <div style={{ display: 'grid', gap: 20, maxHeight: isMobile ? 'none' : 'calc(100vh - 320px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
-          {cabo?.hands.map((h) => {
+        <div style={{ display: 'grid', gap: isMobile ? 10 : 20, gridTemplateColumns: `repeat(auto-fill, minmax(${handMinWidth}px, 1fr))`, alignItems: 'start', maxHeight: isMobile ? 'none' : 'calc(100vh - 340px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
+          {rotateToMe(cabo?.hands ?? [], playerId).map((h) => {
             const player = game.players.find((p) => p.playerId === h.playerId);
             const isMe = h.playerId === playerId;
-            const isTurn = h.playerId === cabo.turn;
+            const isTurn = h.playerId === cabo?.turn;
             const cumulative = game.caboCumulativeScores?.[h.playerId];
             const disconnected = player && !player.connected;
-            const hasPendingDrawIndicator = cabo.pendingDrawPlayers?.includes(h.playerId);
-            const hasBlackKingIndicator = cabo.blackKingPlayers?.includes(h.playerId);
+            const hasPendingDrawIndicator = cabo?.pendingDrawPlayers?.includes(h.playerId);
+            const hasBlackKingIndicator = cabo?.blackKingPlayers?.includes(h.playerId);
             const disconnectedAt = player?.disconnectedAt;
             const graceElapsed = disconnectedAt && Date.now() - disconnectedAt >= 30_000;
             const kickSecondsLeft = disconnectedAt && !graceElapsed ? Math.max(0, 30 - Math.floor((Date.now() - disconnectedAt) / 1000)) : 0;
@@ -1226,28 +1314,25 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
             // my slots from private event
 
-            const perRow = 2;
-            const totalSlots = h.slots.length;
-            const row1Count = Math.min(perRow, totalSlots);
-            const row2Count = Math.max(0, totalSlots - perRow);
+            const row1Count = Math.min(2, h.slots.length);
 
             return (
               <div key={h.playerId} style={{
                 opacity: disconnected ? 0.7 : 1,
-                padding: isTurn ? 12 : 0,
-                borderRadius: isTurn ? theme.borderRadius.xl : 0,
+                padding: handPad,
+                borderRadius: theme.borderRadius.xl,
                 border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent',
                 boxShadow: isTurn && isMe ? theme.shadows.glow : 'none',
                 transition: 'all 0.3s ease-in-out',
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, color: isMe ? theme.colors.primary[400] : theme.colors.dark[200] }}>
                     {player?.displayName}{isMe ? ' (you)' : ''}
                   </span>
                   {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.bold, background: theme.colors.primary[500], color: '#1d1607', padding: '2px 10px', borderRadius: 999 }}>Turn</span>}
                   {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, background: theme.colors.warning[600], color: '#f5f4ec', padding: '2px 10px', borderRadius: 999 }}>Waiting…</span>}
                   {disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}><span style={{ display: 'inline-block', width: 10, height: 10, border: `2px solid ${theme.colors.dark[500]}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: 4 }} />disconnected</span>}
-                  {cumulative !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{cumulative} pts</span>}
+                  {showTotals && cumulative !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{cumulative} pts</span>}
                   {hasPendingDrawIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.primary[400] }}>deciding…</span>}
                   {hasBlackKingIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.secondary[400] }}>black king…</span>}
                   {h.playerId === caboCallerId && <span style={{ fontSize: theme.typography.fontSize.xs, background: `${theme.colors.warning[600]}44`, color: theme.colors.warning[400], padding: '2px 8px', borderRadius: theme.borderRadius.lg, border: `1px solid ${theme.colors.warning[600]}` }}>Called Cabo</span>}
@@ -1256,7 +1341,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                 </div>
 
                 {/* card grid (variable width) */}
-                <div style={{ overflowX: 'auto' }}>
+                <div style={{ overflowX: 'auto', padding: 5, margin: -5 }}>
                   {[h.slots.slice(0, row1Count), h.slots.slice(row1Count)].map((rowSlots, rowIdx) => {
                     if (rowSlots.length === 0) return null;
                     return (
@@ -1268,6 +1353,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                             const peekedHere = peekResult?.slotId === s.slotId;
                             const isSelectableOwnSlot = (
                               (isMyTurn && hasPendingDraw && !hasBlackKingPending && specialMode === 'none' && !snapMode) ||
+                              choosingDiscardSlot ||
                               specialMode === 'peek-own' ||
                               specialMode === 'blind-swap-own' ||
                               (specialMode === 'black-king-decide' && blackKingSeen !== null) ||
@@ -1275,7 +1361,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                             );
                             const isSlideTarget = !!(snapGap && snapSlideSlot === null);
                             return (
-                              <CaboSlotView key={s.slotId} label={`${player?.displayName ?? 'Player'}: hidden card ${s.slotId.split(':').pop()}`}
+                              <CaboSlotView key={s.slotId} label={`Your card ${h.slots.indexOf(s) + 1}`}
                                 card={peekedHere ? peekResult!.card : null}
                                 selectable={isSelectableOwnSlot || isSlideTarget}
                                 selected={selectedOwnSlot === s.slotId || snapSlideSlot === s.slotId}
@@ -1286,6 +1372,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                                 }}
                                 cardSize={cardSize}
                                 showFaceUp={peekedHere}
+                                recent={recentSlots.includes(s.slotId)}
                               />
                             );
                           } else {
@@ -1295,7 +1382,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                               specialMode === 'black-king-see'
                             );
                             return (
-                              <CaboSlotView key={s.slotId} label={`${player?.displayName ?? 'Player'}: hidden card ${s.slotId.split(':').pop()}`}
+                              <CaboSlotView key={s.slotId} label={`${player?.displayName ?? 'Player'}: card ${h.slots.indexOf(s) + 1}`}
                                 card={null}
                                 selectable={isOpponentSelectable && !snapMode}
                                 selected={selectedOpponentSlot?.slotId === s.slotId}
@@ -1306,6 +1393,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                                 }}
                                 cardSize={cardSize}
                                 showFaceUp={false}
+                                recent={recentSlots.includes(s.slotId)}
                               />
                             );
                           }
@@ -1322,14 +1410,14 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
       {/* Turn actions */}
       {isMyTurn && !peekActive && specialMode === 'none' && !snapMode && (phase === 'play' || phase === 'cabo-called') && (
-        <Panel style={{ padding: theme.spacing['2xl'] }}>
+        <Panel style={{ padding: isMobile ? theme.spacing.lg : theme.spacing['2xl'], ...(isMobile ? stickyTurnPanel : {}) }}>
           <div style={{ fontWeight: 600, color: theme.colors.primary[400], marginBottom: 12 }}>
             {phase === 'cabo-called' ? 'Your final turn' : 'Your turn'}
           </div>
 
           {!hasPendingDraw && !hasBlackKingPending && (
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Btn disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => {
+              <Btn size={isMobile ? 'sm' : 'md'} disabled={game.extraDeckCount === 0 && !game.discardTop} onClick={() => {
                 setDeckShaking(true);
                 setTimeout(() => setDeckShaking(false), 500);
                 emit('cabo:draw', {}, (r: any) => {
@@ -1337,30 +1425,38 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                   setPendingDraw(r.card);
                 });
               }}>Draw from deck</Btn>
-              <Btn variant="outline" disabled={!game.discardTop} onClick={() => {
-                const slots = mySlots;
-                if (!slots || slots.length === 0) return notify('No slots to swap into');
-                const slotId = selectedOwnSlot ?? slots[0].slotId;
-                emit('cabo:takeDiscard', { slotId }, (r: any) => {
+              <Btn variant="outline" size={isMobile ? 'sm' : 'md'} disabled={!game.discardTop} onClick={() => {
+                // Never guess the slot: replacing the wrong hidden card is not undoable.
+                if (!selectedOwnSlot || !mySlots?.some((s) => s.slotId === selectedOwnSlot)) return notify('Select one of your cards first, then take the discard');
+                emit('cabo:takeDiscard', { slotId: selectedOwnSlot }, (r: any) => {
                   if (r?.error) return notify(r.error);
                   setSelectedOwnSlot(null);
                 });
               }}>
-                {selectedOwnSlot ? 'Take discard → selected slot' : 'Take discard (select slot first)'}
+                {selectedOwnSlot ? 'Take discard → selected card' : 'Take discard'}
               </Btn>
               {phase === 'play' && (
-                <Btn variant="warning" onClick={() => {
-                  if (!window.confirm('Call Cabo? All other players get one more turn.')) return;
-                  emit('cabo:callCabo', {}, (r: any) => { if (r?.error) notify(r.error); });
-                }}>Call Cabo</Btn>
+                <Btn variant="warning" size={isMobile ? 'sm' : 'md'} onClick={() => setConfirmCabo(true)}>Call Cabo</Btn>
               )}
             </div>
+          )}
+          {confirmCabo && (
+            <Modal title="Call Cabo?" onClose={() => setConfirmCabo(false)}>
+              <p style={{ lineHeight: 1.7, marginTop: 0 }}>Every other player gets one last turn, then all hands are scored. If yours is not the lowest hand, you add 5 points.</p>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <Btn variant="outline" onClick={() => setConfirmCabo(false)}>Keep playing</Btn>
+                <Btn variant="warning" onClick={() => {
+                  setConfirmCabo(false);
+                  emit('cabo:callCabo', {}, (r: any) => { if (r?.error) notify(r.error); });
+                }}>Call Cabo</Btn>
+              </div>
+            </Modal>
           )}
 
           {hasPendingDraw && pendingDraw && !hasBlackKingPending && (
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ color: theme.colors.dark[300] }}>Drawn:</span>
-              <CardView card={pendingDraw} />
+              <CardView card={pendingDraw} size={isMobile ? 'sm' : 'md'} hover={false} />
               <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}>
                 <span style={{ fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>
                   Click one of your cards to place it there
@@ -1389,8 +1485,8 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
           )}
 
           {!selectedOwnSlot && !hasPendingDraw && !hasBlackKingPending && (
-            <p style={{ margin: '8px 0 0', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[500] }}>
-              Click one of your cards to select a slot (for Take Discard)
+            <p style={{ margin: '8px 0 0', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>
+              Draw from the deck, or click one of your cards and take the discard into that spot.
             </p>
           )}
         </Panel>
@@ -1404,6 +1500,15 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 export function App() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'offline' | 'replaced'>('connecting');
+  // Has this tab ever reached the server? A hosted server that was asleep can
+  // take up to a minute to wake, which should not read as "connection lost".
+  const [everConnected, setEverConnected] = useState(false);
+  const [slowStart, setSlowStart] = useState(false);
+  useEffect(() => {
+    if (everConnected) return;
+    const t = setTimeout(() => setSlowStart(true), 4000);
+    return () => clearTimeout(t);
+  }, [everConnected]);
   const [showRules, setShowRules] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [privateState, setPrivateState] = useState<PrivateGameState | null>(null);
@@ -1472,6 +1577,7 @@ export function App() {
 
     s.on('connect', () => {
       setConnection('connected');
+      setEverConnected(true);
       const tok = sessionStorage.getItem('golf_playerToken');
       const savedCode = sessionStorage.getItem('golf_code');
       if (tok && savedCode) {
@@ -1573,6 +1679,14 @@ export function App() {
     });
   }
 
+  function addBot() {
+    request(socket, 'addBot', {}, (res: any) => { if (res?.error) notify(res.error); });
+  }
+
+  function removeBot(botId: string) {
+    request(socket, 'removeBot', { playerId: botId }, (res: any) => { if (res?.error) notify(res.error); });
+  }
+
   function updateConfig(cpp: number) {
     request(socket, 'golf:updateConfig', { cardsPerPlayer: cpp }, (res: any) => { if (res?.error) notify(res.error); });
   }
@@ -1610,7 +1724,10 @@ export function App() {
         </div>
       </header>
       {connection !== 'connected' && <Panel role="status" style={{ maxWidth: 1000, margin: '0 auto 20px', padding: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span>{connection === 'connecting' ? 'Connecting to the card room…' : connection === 'replaced' ? 'Your seat moved to another tab.' : 'Connection lost. Reconnecting… Your seat is held for 30 seconds.'}</span>
+        <span>{connection === 'replaced' ? 'Your seat moved to another tab.'
+          : !everConnected ? (slowStart ? 'Waking up the card room… If nobody has played for a while, the server can take up to a minute to start. This page will connect on its own.' : 'Connecting to the card room…')
+          : connection === 'connecting' ? 'Connecting to the card room…'
+          : game ? 'Connection lost. Reconnecting… Your seat is held for 30 seconds.' : 'Connection lost. Reconnecting…'}</span>
         <Btn size="sm" variant="outline" onClick={() => { setConnection('connecting'); socket?.connect(); }}>Retry connection</Btn>
       </Panel>}
       {game?.notice && <p role="status" style={{ maxWidth: 1000, margin: '0 auto 16px', color: theme.colors.primary[300] }}>{game.notice}</p>}
@@ -1624,7 +1741,7 @@ export function App() {
           <div style={{ textAlign: 'center', marginBottom: theme.spacing['4xl'] }}>
             <div aria-hidden="true" style={{ color: theme.colors.primary[500], fontSize: theme.typography.fontSize.lg, letterSpacing: '0.5em', marginBottom: theme.spacing.md, paddingLeft: '0.5em' }}>♠ ♥ ♦ ♣</div>
             <h1 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['4xl'], fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], margin: `0 0 ${theme.spacing.md}`, letterSpacing: '-0.01em', lineHeight: theme.typography.lineHeight.tight }}>A good hand. A better evening.</h1>
-            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf & Cabo · 2–8 friends · lowest score wins</p>
+            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf & Cabo · 2–8 players · friends or bots</p>
           </div>
           <Panel style={{ padding: theme.spacing['3xl'], marginBottom: theme.spacing['2xl'] }}>
             <div style={{ marginBottom: theme.spacing['2xl'] }}>
@@ -1746,26 +1863,32 @@ export function App() {
             <div style={{ display: 'grid', gap: theme.spacing.sm }}>
               {game.players.map((p) => (
                 <div key={p.playerId} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.md, padding: `${theme.spacing.sm} ${theme.spacing.md}`, background: theme.colors.dark[900], border: `1px solid ${theme.colors.dark[700]}`, borderRadius: theme.borderRadius.lg }}>
-                  <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: p.playerId === playerId ? theme.colors.primary[500] : theme.colors.dark[600], color: p.playerId === playerId ? '#1d1607' : theme.colors.dark[100], display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: theme.typography.fontSize.sm, fontWeight: theme.typography.fontWeight.bold, flexShrink: 0 }}>
-                    {(p.displayName || '?').trim().charAt(0).toUpperCase()}
+                  <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: p.playerId === playerId ? theme.colors.primary[500] : p.isBot ? theme.colors.secondary[700] : theme.colors.dark[600], color: p.playerId === playerId ? '#1d1607' : theme.colors.dark[100], display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: theme.typography.fontSize.sm, fontWeight: theme.typography.fontWeight.bold, flexShrink: 0 }}>
+                    {(p.isBot ? p.displayName.replace(/^Bot\s+/, '') : p.displayName || '?').trim().charAt(0).toUpperCase()}
                   </span>
                   <span style={{ color: p.playerId === playerId ? theme.colors.primary[300] : theme.colors.dark[100], fontWeight: theme.typography.fontWeight.medium, flex: 1, textAlign: 'left' }}>
                     {p.displayName}{p.playerId === playerId ? ' (you)' : ''}
                   </span>
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     {p.playerId === game.hostId && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.primary[400], border: `1px solid ${theme.colors.primary[700]}`, borderRadius: 999, padding: '2px 10px' }}>Host</span>}
-                    {!p.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>disconnected</span>}
+                    {!p.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[400] }}>disconnected</span>}
+                    {p.isBot && isHost && <Btn variant="ghost" size="sm" aria-label={`Remove ${p.displayName}`} onClick={() => removeBot(p.playerId)}>Remove</Btn>}
                   </div>
                 </div>
               ))}
             </div>
+            {isHost && game.botsEnabled && game.players.length < game.config.maxPlayers && (
+              <Btn variant="outline" size="sm" onClick={addBot} disabled={connection !== 'connected'} style={{ width: '100%', marginTop: theme.spacing.md }}>+ Add a bot</Btn>
+            )}
             <div style={{ display: 'flex', gap: theme.spacing.lg, marginTop: theme.spacing['2xl'] }}>
               {isHost && <Btn onClick={startGame} disabled={game.players.filter(p => p.connected).length < 2 || game.players.some(p => !p.connected) || connection !== 'connected'} style={{ flex: 1 }}>Start game</Btn>}
               <Btn variant="outline" onClick={() => setShowRules(true)}>Learn to play</Btn>
             </div>
             {!isHost && <p role="status" style={{ color: theme.colors.dark[300], lineHeight: 1.6 }}>Your host will start the game when everyone is ready. Read the rules while you wait.</p>}
             {isHost && (game.players?.length || 0) < 2 && (
-              <p style={{ margin: `${theme.spacing.md} 0 0`, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[500], textAlign: 'center' }}>You need at least 2 players to start</p>
+              <p style={{ margin: `${theme.spacing.md} 0 0`, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400], textAlign: 'center', lineHeight: 1.6 }}>
+                {game.botsEnabled ? 'You need at least 2 players. Send the invite link, or add a bot to play right now.' : 'You need at least 2 players to start'}
+              </p>
             )}
           </Panel>
         </div>
@@ -1807,7 +1930,7 @@ export function App() {
 
       {/* Golf table */}
       {view === 'table' && game && isGolf && (
-        <div className="view-enter" style={{ position: 'relative', zIndex: 1 }}>
+        <div className="view-enter" style={{ position: 'relative', zIndex: 1, maxWidth: 1000, margin: '0 auto' }}>
           <GolfTable key={`${game.gameId}:${game.matchNumber}`} game={game} playerId={playerId} myGolfSlots={myGolfSlots} socket={socket}
             pendingDraw={pendingDraw} setPendingDraw={setPendingDraw}
             selectedSlotId={selectedSlotId} setSelectedSlotId={setSelectedSlotId} />
@@ -1816,7 +1939,7 @@ export function App() {
 
       {/* Cabo table */}
       {view === 'table' && game && isCabo && (
-        <div className="view-enter" style={{ position: 'relative', zIndex: 1 }}>
+        <div className="view-enter" style={{ position: 'relative', zIndex: 1, maxWidth: 1000, margin: '0 auto' }}>
           <CaboTable key={`${game.gameId}:${game.matchNumber}`} restoredKing={privateState?.blackKing ?? null} game={game} playerId={playerId} mySlots={caboMySlots} socket={socket}
             pendingDraw={caboPendingDraw} setPendingDraw={setCaboPendingDraw}
             snapGap={caboSnapGap} setSnapGap={setCaboSnapGap} />
@@ -1833,6 +1956,7 @@ export function App() {
       {/* Cabo between-rounds / rematch modal */}
       {game && isCabo && (phase === 'between-rounds' || phase === 'rematch-pending') && (
         <CaboScoreModal onRules={() => setShowRules(true)} game={game} playerId={playerId} phase={phase}
+          myHand={privateState?.caboSlots ?? []} myHandTotal={privateState?.caboHandTotal ?? null}
           onAckNextRound={ackNextRound} onAckRematch={ackRematch} onLeave={() => setConfirmLeave(true)} />
       )}
 

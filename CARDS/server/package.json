@@ -19,7 +19,8 @@
     "test:dealing:golf": "node --loader ts-node/esm src/test-dealing-golf.ts",
     "test:reaper": "node --loader ts-node/esm src/test-reaper.ts",
     "test:validation": "node --loader ts-node/esm src/test-validation.ts",
-    "test:release": "node --loader ts-node/esm src/test-release.ts"
+    "test:release": "node --loader ts-node/esm src/test-release.ts",
+    "test:bots": "node --loader ts-node/esm src/test-bots.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

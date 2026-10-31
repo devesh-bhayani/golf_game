@@ -26,6 +26,7 @@
     "src/test-reaper.ts",
     "src/test-validation.ts",
     "src/test-cabo-specials.ts",
-    "src/test-release.ts"
+    "src/test-release.ts",
+    "src/test-bots.ts"
   ]
 }

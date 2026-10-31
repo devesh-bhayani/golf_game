@@ -88,6 +88,10 @@ Browser (React SPA, Vercel)                Server (Node, Fly/Render)
 
 **Lifecycle sync**: phases that need everyone's confirmation (peek done, next round, rematch) use ack-sets (`peekAckByPlayer`, `betweenRoundAckByPlayer`, `rematchAckByPlayer`). Disconnected players are auto-acked (`autoAckDisconnected`) so one closed tab never blocks the room. The disconnect handler also auto-acks and, in Cabo's final-turns phase, skips the disconnected player's turn.
 
+**Bots**: the host can add bots in the lobby (`addBot`/`removeBot`). A bot is a normal seat whose connection is a `BotSocket`, an in-process object that implements the slice of socket.io's `Socket` that `attachSocketHandlers()` uses. It joins via `joinGame`, sends requests through the same middleware and handlers as a browser, and receives exactly what `emitToPlayer()` would send that seat (`game:update`, `game:private`, power results). Its strategy is a small heuristic: Golf estimates hand value from known cards (pairs and Kings included) plus the average unseen card; Cabo remembers its peeked/placed cards, forgets ones a rival swapped (from `lastAction`), uses powers sensibly, and calls Cabo when its hand looks low (the bar loosens as the round drags on, so rounds with bots always end). Bots act on a timer (`BOT_STEP_MS`), hold still while no human is connected, and never keep a room alive.
+
+**Move log**: every gameplay mutation calls `logAction()`, which puts one public line (`lastAction: { seq, actorId, kind, text, slotIds }`) in the snapshot. The client shows it as "Last move" and outlines the touched slots. It only names face-up cards.
+
 **Cleanup**: `reapStaleGames()` runs every 5 min (`unref()`'d interval) and deletes games where every player has been disconnected for over an hour (`GAME_TTL_MS`), freeing all three maps. `leaveGame` (lobby/rematch only) deletes eagerly and transfers host.
 
 ## Key design decisions
@@ -105,6 +109,7 @@ Browser (React SPA, Vercel)                Server (Node, Fly/Render)
 - **`decksNeeded()` + the three dealers** (`dealCards`, `dealGolfRound`, `dealCaboRound`) — deck sizing was the project's worst historical bug (large tables dealt `undefined` cards). All three set `state.config.numberOfDecks = decksNeeded(...)` before `dealDeck(state)`. Keep that invariant.
 - **`calculateGolfScore` / `caboCardValue` / `finalizeCaboRound`** — scoring. Golf combos: pairs/triples score 0, 4-of-a-kind is −20, Kings are 0/−5/−10/−20 by count. Cabo: A=0, red K=−1, black K=10, lowest hand scores 0 for the round, caller +5 unless lowest. Tests assert these; run them after any change.
 - **`caboEndTurn` + `cabo:callCabo`** — final-turns countdown with disconnected-player skipping. The trickiest control flow in the file; both duplicate a "skip disconnected, maybe finalize" loop.
+- **Bot lifetime** (`humanPlayers()` in the reaper, the disconnect grace timer, host transfer, and `removePlayer`) — if any of these counted bots, a room could outlive its humans and bots would play on forever.
 - **Reconnect flow** (`rejoinGame`, disconnect handler, `tokenIndex`) — breaks are invisible in happy-path testing but destroy real games on phone lock/tab switch.
 - **Safe to change casually**: all client styling (the `theme` object and inline styles), copy text, the score modal layouts, GOLF_RULES.md wording, test scripts.
 
