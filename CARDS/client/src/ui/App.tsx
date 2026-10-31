@@ -542,6 +542,14 @@ function CountUp({ target, duration = 900 }: { target: number; duration?: number
 
 // ---- Golf Round score modal ----
 
+// Results actions stay pinned to the bottom of the dialog, so Ready is never
+// below the fold on a short laptop screen or with a full table.
+const modalActions: React.CSSProperties = {
+  display: 'flex', gap: theme.spacing.md, justifyContent: 'flex-end', flexWrap: 'wrap',
+  position: 'sticky', bottom: 0, background: theme.colors.dark[800],
+  padding: '12px 0 4px', borderTop: `1px solid ${theme.colors.dark[700]}`,
+};
+
 function RoundScoreModal({
   game, playerId, phase, onAckNextRound, onAckRematch, onLeave, onUpdateConfig, isHost, scoreDetails, onRules,
 }: {
@@ -561,11 +569,8 @@ function RoundScoreModal({
   return (
     <>
       {isEnd && <Confetti />}
-      <Modal title={isEnd ? 'Match results' : 'Round results'}>
-        <Panel style={{ padding: 12, maxWidth: 640, width: '100%' }} className="fade-in">
-          <h2 style={{ margin: '0 0 1rem', fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], fontSize: theme.typography.fontSize['2xl'] }}>
-            {isEnd ? 'Game over' : `Round ${game.currentRound} complete`}
-          </h2>
+      <Modal title={isEnd ? 'Game over' : `Round ${game.currentRound} complete`}>
+        <div className="fade-in">
           {game.notice && <p role="status" style={{ color: theme.colors.primary[300] }}>{game.notice}</p>}
           <details style={{ marginBottom: 20 }}><summary style={{ cursor: 'pointer', padding: '10px 0' }}>Why your hand scored {scoreDetails.reduce((sum, item) => sum + item.points, 0)}</summary>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '12px 0' }}>{game.golf?.hands.find(h => h.playerId === playerId)?.slots.map(slot => slot.card && <CardView key={slot.slotId} card={slot.card} size="sm" />)}</div>
@@ -653,14 +658,14 @@ function RoundScoreModal({
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: theme.spacing.md, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={modalActions}>
             <Btn variant="ghost" onClick={onRules}>Rules & how to play</Btn>
             <Btn variant="outline" onClick={onLeave}>Leave room</Btn>
             <Btn variant="success" onClick={isBetween ? onAckNextRound : onAckRematch} disabled={alreadyAcked}>
               {alreadyAcked ? 'Waiting…' : isEnd ? 'Play Again' : 'Ready'}
             </Btn>
           </div>
-        </Panel>
+        </div>
       </Modal>
     </>
   );
@@ -669,10 +674,11 @@ function RoundScoreModal({
 // ---- Cabo Score Modal ----
 
 function CaboScoreModal({
-  game, playerId, phase, onAckNextRound, onAckRematch, onLeave, onRules,
+  game, playerId, phase, onAckNextRound, onAckRematch, onLeave, onRules, myHand, myHandTotal,
 }: {
   game: GameSnapshot; playerId: string | null; phase: GamePhase;
   onAckNextRound: () => void; onAckRematch: () => void; onLeave: () => void; onRules: () => void;
+  myHand: CaboSlotPrivate[]; myHandTotal: number | null;
 }) {
   const isBetween = phase === 'between-rounds';
   const isEnd = phase === 'rematch-pending';
@@ -681,15 +687,30 @@ function CaboScoreModal({
   const playerOrder = game.players;
   const roundCount = game.caboRoundScores ? Math.max(...game.caboRoundScores.map((r) => r.scores.length), 0) : 0;
   const winners = isEnd ? game.caboLeaderboard?.filter((e) => e.rank === 1) : [];
+  const myScores = game.caboRoundScores?.find((r) => r.playerId === playerId)?.scores ?? [];
+  const myRoundScore = myScores[myScores.length - 1];
+  const iCalled = game.cabo?.caboCallerId === playerId;
+  const shownCards = myHand.filter((s): s is { slotId: string; card: CardT } => !!s.card);
 
   return (
     <>
       {isEnd && <Confetti />}
-      <Modal title={isEnd ? 'Match results' : 'Round results'}>
-        <Panel style={{ padding: 12, maxWidth: 640, width: '100%' }} className="fade-in">
-          <h2 style={{ margin: '0 0 1rem', fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], fontSize: theme.typography.fontSize['2xl'] }}>
-            {isEnd ? 'Game over' : `Round ${game.currentRound} complete`}
-          </h2>
+      <Modal title={isEnd ? 'Game over' : `Round ${game.currentRound} complete`}>
+        <div className="fade-in">
+          {myHandTotal !== null && shownCards.length === myHand.length && (
+            <details style={{ marginBottom: 20 }}>
+              <summary style={{ cursor: 'pointer', padding: '10px 0' }}>Your final hand added up to {myHandTotal}</summary>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '12px 0' }}>
+                {shownCards.length ? shownCards.map((s) => <CardView key={s.slotId} card={s.card} size="sm" hover={false} />) : <span style={{ color: theme.colors.dark[300] }}>No cards left — every one was snapped.</span>}
+              </div>
+              <p style={{ lineHeight: 1.6, margin: '0 0 8px' }}>
+                {myRoundScore === 0 ? 'Lowest hand at the table, so it scores 0 this round.'
+                  : iCalled ? `You called Cabo without the lowest hand: ${myHandTotal} + 5 = ${myRoundScore}.`
+                  : `Not the lowest hand, so it scores ${myRoundScore}.`}
+              </p>
+              <p style={{ color: theme.colors.dark[300], margin: 0 }}>Ace 0 · Red King −1 · Jack, Queen and Black King 10 · other cards face value.</p>
+            </details>
+          )}
           {isEnd && winners && winners.length > 0 && (
             <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: 'rgba(209, 168, 69, 0.12)', border: `1px solid ${theme.colors.primary[700]}`, borderRadius: theme.borderRadius.lg }}>
               <span style={{ color: theme.colors.primary[400], fontWeight: 700 }}>
@@ -753,20 +774,33 @@ function CaboScoreModal({
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: theme.spacing.md, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={modalActions}>
             <Btn variant="ghost" onClick={onRules}>Rules & how to play</Btn>
             <Btn variant="outline" onClick={onLeave}>Leave room</Btn>
             <Btn variant="success" onClick={isBetween ? onAckNextRound : onAckRematch} disabled={alreadyAcked}>
               {alreadyAcked ? 'Waiting…' : isEnd ? 'Play Again' : 'Ready'}
             </Btn>
           </div>
-        </Panel>
+        </div>
       </Modal>
     </>
   );
 }
 
 // ---- Golf table ----
+
+// On phones the turn controls stay on screen while you scroll the table.
+const stickyTurnPanel: React.CSSProperties = {
+  position: 'sticky', bottom: 8, zIndex: 5,
+  border: `1px solid ${theme.colors.primary[700]}`, boxShadow: theme.shadows.xl,
+};
+
+// Your own hand first, then everyone else in turn order (a rotation, so the
+// seating order around the table is unchanged).
+function rotateToMe<T extends { playerId: string }>(hands: T[], playerId: string | null): T[] {
+  const i = hands.findIndex((h) => h.playerId === playerId);
+  return i > 0 ? [...hands.slice(i), ...hands.slice(0, i)] : hands;
+}
 
 function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendingDraw, selectedSlotId, setSelectedSlotId }: {
   game: GameSnapshot; playerId: string | null;
@@ -798,7 +832,9 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
   const emit = (event: string, payload: any, cb?: (r: any) => void) => request(socket, event, payload, cb);
   // Hands sit side by side on wider screens: one hand is `perRow` slots wide
   // (card + padding + border) plus the turn highlight's padding.
-  const handMinWidth = perRow * ((cardSize === 'sm' ? 60 : 80) + 8) + (perRow - 1) * cardGap + 28;
+  const handPad = isMobile ? 8 : 12;
+  const handMinWidth = perRow * ((cardSize === 'sm' ? 60 : 80) + 8) + (perRow - 1) * cardGap + 2 * handPad + 4;
+  const showTotals = (game.roundScores ?? []).some((r) => r.scores.length > 0);
   const recentSlots = game.lastAction?.slotIds ?? [];
 
   return (
@@ -842,8 +878,8 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
       {peekActive && (peekAcked || game.golf?.peekAcks?.includes(playerId ?? '')) && <Panel role="status" style={{ padding: 20 }}>Your cards are hidden. Waiting for the other players…</Panel>}
       {!peekActive && <LastMove game={game} playerId={playerId} />}
       {!peekActive && (
-        <div style={{ display: 'grid', gap: 20, gridTemplateColumns: isMobile ? '1fr' : `repeat(auto-fill, minmax(${handMinWidth}px, 1fr))`, alignItems: 'start', maxHeight: isMobile ? 'none' : 'calc(100vh - 290px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
-          {game.golf?.hands.map((h) => {
+        <div style={{ display: 'grid', gap: isMobile ? 10 : 20, gridTemplateColumns: `repeat(auto-fill, minmax(${handMinWidth}px, 1fr))`, alignItems: 'start', maxHeight: isMobile ? 'none' : 'calc(100vh - 290px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
+          {rotateToMe(game.golf?.hands ?? [], playerId).map((h) => {
             const player = game.players.find((p) => p.playerId === h.playerId);
             const isMe = h.playerId === playerId;
             const isTurn = h.playerId === game.golf?.turn;
@@ -855,13 +891,13 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
             const isHost = playerId === game.hostId;
 
             return (
-              <div key={h.playerId} style={{ opacity: disconnected ? 0.7 : 1, padding: 12, borderRadius: theme.borderRadius.xl, border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent', boxShadow: isTurn && isMe ? theme.shadows.glow : 'none', transition: 'all 0.3s ease-in-out' }}>
+              <div key={h.playerId} style={{ opacity: disconnected ? 0.7 : 1, padding: handPad, borderRadius: theme.borderRadius.xl, border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent', boxShadow: isTurn && isMe ? theme.shadows.glow : 'none', transition: 'all 0.3s ease-in-out' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, color: isMe ? theme.colors.primary[400] : theme.colors.dark[200] }}>{player?.displayName}{isMe ? ' (you)' : ''}</span>
                   {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.bold, background: theme.colors.primary[500], color: '#1d1607', padding: '2px 10px', borderRadius: 999 }}>Turn</span>}
                   {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, background: theme.colors.warning[600], color: '#f5f4ec', padding: '2px 10px', borderRadius: 999 }}>Waiting…</span>}
                   {disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}><span style={{ display: 'inline-block', width: 10, height: 10, border: `2px solid ${theme.colors.dark[500]}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: 4 }} />disconnected</span>}
-                  {running !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{running} pts</span>}
+                  {showTotals && running !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{running} pts</span>}
                   {isHost && !isMe && disconnected && !graceElapsed && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>kick in {kickSecondsLeft}s</span>}
                   {isHost && !isMe && disconnected && graceElapsed && <Btn size="sm" variant="error" onClick={() => emit('golf:kickPlayer', { playerId: h.playerId }, (r: any) => { if (r?.error) notify(r.error); })}>Kick</Btn>}
                 </div>
@@ -880,7 +916,7 @@ function GolfTable({ game, playerId, myGolfSlots, socket, pendingDraw, setPendin
       )}
 
       {isMyTurn && !peekActive && (
-        <Panel style={{ padding: theme.spacing['2xl'] }}>
+        <Panel style={{ padding: isMobile ? theme.spacing.lg : theme.spacing['2xl'], ...(isMobile ? stickyTurnPanel : {}) }}>
           <div style={{ fontWeight: 600, color: theme.colors.primary[400], marginBottom: 12 }}>Your turn</div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             {!pendingDraw && (
@@ -1014,7 +1050,9 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
   const choosingDiscardSlot = isMyTurn && !hasPendingDraw && !hasBlackKingPending && specialMode === 'none' && !snapMode && !snapGap
     && (phase === 'play' || phase === 'cabo-called') && !!game.discardTop;
   const [confirmCabo, setConfirmCabo] = useState(false);
-  const handMinWidth = 2 * ((cardSize === 'sm' ? 60 : 80) + 8) + cardGap + 28;
+  const handPad = isMobile ? 8 : 12;
+  const handMinWidth = 2 * ((cardSize === 'sm' ? 60 : 80) + 8) + cardGap + 2 * handPad + 4;
+  const showTotals = (game.caboRoundScores ?? []).some((r) => r.scores.length > 0);
   const recentSlots = game.lastAction?.slotIds ?? [];
 
   const emit = (event: string, payload: any, cb?: (r: any) => void) => request(socket, event, payload, cb);
@@ -1260,15 +1298,15 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
       {/* Main table: all players */}
       {!peekActive && (
-        <div style={{ display: 'grid', gap: 20, gridTemplateColumns: isMobile ? '1fr' : `repeat(auto-fill, minmax(${handMinWidth}px, 1fr))`, alignItems: 'start', maxHeight: isMobile ? 'none' : 'calc(100vh - 340px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
-          {cabo?.hands.map((h) => {
+        <div style={{ display: 'grid', gap: isMobile ? 10 : 20, gridTemplateColumns: `repeat(auto-fill, minmax(${handMinWidth}px, 1fr))`, alignItems: 'start', maxHeight: isMobile ? 'none' : 'calc(100vh - 340px)', overflowY: isMobile ? 'visible' : 'auto', paddingRight: isMobile ? 0 : 4 }}>
+          {rotateToMe(cabo?.hands ?? [], playerId).map((h) => {
             const player = game.players.find((p) => p.playerId === h.playerId);
             const isMe = h.playerId === playerId;
-            const isTurn = h.playerId === cabo.turn;
+            const isTurn = h.playerId === cabo?.turn;
             const cumulative = game.caboCumulativeScores?.[h.playerId];
             const disconnected = player && !player.connected;
-            const hasPendingDrawIndicator = cabo.pendingDrawPlayers?.includes(h.playerId);
-            const hasBlackKingIndicator = cabo.blackKingPlayers?.includes(h.playerId);
+            const hasPendingDrawIndicator = cabo?.pendingDrawPlayers?.includes(h.playerId);
+            const hasBlackKingIndicator = cabo?.blackKingPlayers?.includes(h.playerId);
             const disconnectedAt = player?.disconnectedAt;
             const graceElapsed = disconnectedAt && Date.now() - disconnectedAt >= 30_000;
             const kickSecondsLeft = disconnectedAt && !graceElapsed ? Math.max(0, 30 - Math.floor((Date.now() - disconnectedAt) / 1000)) : 0;
@@ -1281,7 +1319,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
             return (
               <div key={h.playerId} style={{
                 opacity: disconnected ? 0.7 : 1,
-                padding: 12,
+                padding: handPad,
                 borderRadius: theme.borderRadius.xl,
                 border: isTurn ? `2px solid ${isMe ? theme.colors.primary[500] : theme.colors.dark[500]}` : '2px solid transparent',
                 boxShadow: isTurn && isMe ? theme.shadows.glow : 'none',
@@ -1294,7 +1332,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
                   {isTurn && !disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.bold, background: theme.colors.primary[500], color: '#1d1607', padding: '2px 10px', borderRadius: 999 }}>Turn</span>}
                   {isTurn && disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, background: theme.colors.warning[600], color: '#f5f4ec', padding: '2px 10px', borderRadius: 999 }}>Waiting…</span>}
                   {disconnected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}><span style={{ display: 'inline-block', width: 10, height: 10, border: `2px solid ${theme.colors.dark[500]}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: 4 }} />disconnected</span>}
-                  {cumulative !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{cumulative} pts</span>}
+                  {showTotals && cumulative !== undefined && <span style={{ fontSize: theme.typography.fontSize.xs, padding: '2px 8px', background: theme.colors.dark[700], border: `1px solid ${theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg, color: theme.colors.dark[300] }}>{cumulative} pts</span>}
                   {hasPendingDrawIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.primary[400] }}>deciding…</span>}
                   {hasBlackKingIndicator && !isMe && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.secondary[400] }}>black king…</span>}
                   {h.playerId === caboCallerId && <span style={{ fontSize: theme.typography.fontSize.xs, background: `${theme.colors.warning[600]}44`, color: theme.colors.warning[400], padding: '2px 8px', borderRadius: theme.borderRadius.lg, border: `1px solid ${theme.colors.warning[600]}` }}>Called Cabo</span>}
@@ -1372,7 +1410,7 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
 
       {/* Turn actions */}
       {isMyTurn && !peekActive && specialMode === 'none' && !snapMode && (phase === 'play' || phase === 'cabo-called') && (
-        <Panel style={{ padding: theme.spacing['2xl'] }}>
+        <Panel style={{ padding: isMobile ? theme.spacing.lg : theme.spacing['2xl'], ...(isMobile ? stickyTurnPanel : {}) }}>
           <div style={{ fontWeight: 600, color: theme.colors.primary[400], marginBottom: 12 }}>
             {phase === 'cabo-called' ? 'Your final turn' : 'Your turn'}
           </div>
@@ -1690,7 +1728,7 @@ export function App() {
           <div style={{ textAlign: 'center', marginBottom: theme.spacing['4xl'] }}>
             <div aria-hidden="true" style={{ color: theme.colors.primary[500], fontSize: theme.typography.fontSize.lg, letterSpacing: '0.5em', marginBottom: theme.spacing.md, paddingLeft: '0.5em' }}>♠ ♥ ♦ ♣</div>
             <h1 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['4xl'], fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], margin: `0 0 ${theme.spacing.md}`, letterSpacing: '-0.01em', lineHeight: theme.typography.lineHeight.tight }}>A good hand. A better evening.</h1>
-            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf & Cabo · 2–8 players · friends or bots · lowest score wins</p>
+            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf & Cabo · 2–8 players · friends or bots</p>
           </div>
           <Panel style={{ padding: theme.spacing['3xl'], marginBottom: theme.spacing['2xl'] }}>
             <div style={{ marginBottom: theme.spacing['2xl'] }}>
@@ -1905,6 +1943,7 @@ export function App() {
       {/* Cabo between-rounds / rematch modal */}
       {game && isCabo && (phase === 'between-rounds' || phase === 'rematch-pending') && (
         <CaboScoreModal onRules={() => setShowRules(true)} game={game} playerId={playerId} phase={phase}
+          myHand={privateState?.caboSlots ?? []} myHandTotal={privateState?.caboHandTotal ?? null}
           onAckNextRound={ackNextRound} onAckRematch={ackRematch} onLeave={() => setConfirmLeave(true)} />
       )}
 

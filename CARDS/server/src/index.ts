@@ -622,6 +622,8 @@ function privatePlayerState(state: GameState, playerId: string) {
     blackKing: king && target ? { targetPlayerId: king.targetPlayerId, slotId: target.slotId, card: target.card } : null,
     snapGap: state.caboSnapGapPending?.has(playerId) ? { opponentId: state.caboSnapGapPending.get(playerId)! } : null,
     scoreDetails: results && state.golfHands?.has(playerId) ? golfScoreDetails(state.golfHands.get(playerId)!) : [],
+    // Raw Cabo hand value at round end (before the lowest-hand 0 / caller +5 adjustments).
+    caboHandTotal: results && state.caboHands?.has(playerId) ? calculateCaboHandScore(state.caboHands.get(playerId)!) : null,
   };
 }
 
@@ -1917,7 +1919,7 @@ function attachSocketHandlers(socket: Socket) {
 // human is connected, and are removed with the room (they never keep one alive).
 
 const BOT_NAMES = ['Ada', 'Milo', 'Juno', 'Rex', 'Pip', 'Nova', 'Ziggy', 'Lulu'];
-const BOT_STEP_MS = Math.max(10, Number(process.env.BOT_STEP_MS) || 1100);
+const BOT_STEP_MS = Math.max(10, Number(process.env.BOT_STEP_MS) || 900);
 const GOLF_UNSEEN_EV = 75 / 13; // average Golf value of a card we have not seen
 const CABO_UNSEEN_EV = 6;       // average Cabo value of a card we have not seen
 const botSockets = new Map<string, BotSocket>(); // BotSocket.id -> bot

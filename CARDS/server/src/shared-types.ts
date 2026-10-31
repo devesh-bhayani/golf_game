@@ -107,4 +107,5 @@ export type PrivateGameState = {
   blackKing: { targetPlayerId: string; slotId: string; card: Card } | null;
   snapGap: { opponentId: string } | null;
   scoreDetails: Array<{ label: string; points: number }>;
+  caboHandTotal?: number | null; // own raw Cabo hand value, results phases only
 };
