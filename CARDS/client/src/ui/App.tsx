@@ -1640,6 +1640,31 @@ function TeenPattiTable({ game, playerId, priv, socket }: {
           const player = game.players.find((p) => p.playerId === seat.playerId);
           const seenCards = isMe ? priv?.tpCards : known.find((k) => k.playerId === seat.playerId)?.cards;
           const status = !seat.inHand ? 'Sitting out' : seat.packed ? 'Packed' : seat.seen ? 'Seen' : 'Blind';
+          // Phones: other players' face-down hands collapse to one short row so
+          // eight seats fit without a long scroll.
+          if (isMobile && !isMe && !seenCards) return (
+            <div key={seat.playerId} style={{
+              padding: '8px 10px', borderRadius: theme.borderRadius.lg,
+              border: `2px solid ${isTurn ? theme.colors.dark[500] : 'transparent'}`,
+              background: isTurn ? 'rgba(245, 244, 236, 0.04)' : 'transparent',
+              opacity: seat.packed || !seat.inHand ? 0.6 : player && !player.connected ? 0.7 : 1,
+              ...(recent === seat.playerId && !isTurn ? { outline: `2px dashed ${theme.colors.primary[300]}55`, outlineOffset: 2 } : {}),
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, color: theme.colors.dark[200] }}>{player?.displayName}</span>
+                {tp.dealerId === seat.playerId && <Chip tone="muted">Dealer</Chip>}
+                {isTurn && <Chip tone="gold">Turn</Chip>}
+                <Chip tone={status === 'Seen' ? 'blue' : 'neutral'}>{status}</Chip>
+                {player && !player.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[400] }}>disconnected</span>}
+                {isHost && player && !player.connected && player.disconnectedAt && Date.now() - player.disconnectedAt >= 30_000 && <Btn size="sm" variant="error" onClick={() => emit('tp:kickPlayer', { playerId: seat.playerId })}>Kick</Btn>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, fontSize: theme.typography.fontSize.sm, fontVariantNumeric: 'tabular-nums' }}>
+                {seat.inHand && <span aria-hidden="true" style={{ display: 'inline-flex', gap: 3 }}>{[0, 1, 2].map((i) => <span key={i} style={{ width: 14, height: 20, borderRadius: 3, border: `1px solid ${theme.colors.primary[700]}`, background: theme.colors.dark[700] }} />)}</span>}
+                <span style={{ color: theme.colors.dark[200] }}>{coins(seat.coins)} coins</span>
+                {seat.inHand && <span style={{ color: theme.colors.dark[400], marginLeft: 'auto' }}>in pot {coins(seat.bet)}</span>}
+              </div>
+            </div>
+          );
           return (
             <div key={seat.playerId} style={{
               padding: isMobile ? 8 : 12, borderRadius: theme.borderRadius.xl,
@@ -1687,8 +1712,9 @@ function TeenPattiTable({ game, playerId, priv, socket }: {
             </div>
           ) : options?.myTurn ? (
             <div style={{ display: 'grid', gap: 12 }}>
-              <div style={{ fontWeight: 600, color: theme.colors.primary[400] }}>Your turn <span style={{ color: theme.colors.dark[400], fontWeight: 400 }}>· {me.seen ? 'seen' : 'playing blind'} · stake {coins(tp.stake)}</span></div>
+              <div style={{ fontWeight: 600, color: theme.colors.primary[400] }}>Your turn <span style={{ color: theme.colors.dark[400], fontWeight: 400 }}>· {me.seen ? 'seen' : 'playing blind'} · pot {coins(tp.pot)} · stake {coins(tp.stake)}</span></div>
               {options.mustSee && <div style={{ color: theme.colors.warning[400], fontSize: theme.typography.fontSize.sm }}>Blind limit reached: look at your cards to keep playing.</div>}
+              {options.bets.some((b) => tp.pot + b.amount >= tp.potLimit) && <div style={{ color: theme.colors.primary[300], fontSize: theme.typography.fontSize.sm }}>The pot limit is {coins(tp.potLimit)}. A bet that reaches it ends the hand: every hand still in is shown.</div>}
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 {options.canSee && <Btn variant="outline" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:see')}>See cards</Btn>}
                 {options.bets.map((b) => <Btn key={String(b.double)} variant={b.double ? 'warning' : 'primary'} size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:bet', { double: b.double })}>{b.label} {coins(b.amount)}</Btn>)}
@@ -1701,6 +1727,7 @@ function TeenPattiTable({ game, playerId, priv, socket }: {
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
               <span style={{ color: theme.colors.dark[300] }}>
                 {!me.inHand ? 'You are sitting out this hand.' : me.packed ? 'You packed this hand.' : `Waiting for ${nameOf(tp.turn)}…`}
+                <span style={{ color: theme.colors.dark[400] }}> · pot {coins(tp.pot)}</span>
               </span>
               <div style={{ display: 'flex', gap: 10 }}>
                 {options?.canSee && <Btn variant="outline" size="sm" onClick={() => emit('tp:see')}>See cards</Btn>}
@@ -1743,8 +1770,8 @@ function TpResultModal({ game, playerId, priv, phase, onAckNextRound, onAckRemat
             </div>
           )}
           {result && result.shown.length > 0 && (
-            <div style={{ display: 'grid', gap: 12, marginBottom: theme.spacing['2xl'] }}>
-              {result.shown.map((h) => (
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', marginBottom: theme.spacing['2xl'] }}>
+              {[...result.shown].sort((a, b) => Number(winners.includes(b.playerId)) - Number(winners.includes(a.playerId))).map((h) => (
                 <div key={h.playerId} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', gap: 6 }}>{h.cards.map((c) => <CardView key={c.cardId} card={c} size="sm" hover={false} />)}</div>
                   <div>
