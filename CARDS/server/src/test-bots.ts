@@ -183,9 +183,58 @@ async function cabo() {
   back.socket.close();
 }
 
+async function teenPatti() {
+  console.log('--- Bots: Teen Patti ---');
+  const human = new Seat(await connect());
+  const created = await emit(human.socket, 'createGame', { displayName: 'Human', config: { gameMode: 'teenpatti', tpStakes: 'low', tpHands: 0 } });
+  human.playerId = created.playerId;
+  for (let i = 0; i < 3; i++) await emit(human.socket, 'addBot');
+  await waitUntil(() => human.snap?.players.length === 4, 'three bots seated');
+  check(!!(await emit(human.socket, 'startGame')).ok, 'start Teen Patti with three bots');
+
+  const tp = () => human.snap.tp;
+  const total = () => tp().seats.reduce((a: number, x: any) => a + x.coins, 0) + tp().pot;
+  let hands = 0;
+  let botActions = 0;
+  let lastSeq = 0;
+  let balanced = true;
+  const deadline = Date.now() + 90000;
+  while (hands < 6 && Date.now() < deadline) {
+    const snap = human.snap;
+    const a = snap.lastAction;
+    if (a && a.seq !== lastSeq) { lastSeq = a.seq; if (a.actorId !== human.playerId) botActions++; }
+    const granted = 4 * 1000 + tp().seats.reduce((n: number, x: any) => n + (x.coins - x.net - 1000), 0);
+    if (total() !== granted) balanced = false;
+    const opts = human.priv?.tpOptions;
+    if (snap.phase === 'play' && human.priv?.tpSideShowAsk) {
+      // A bot asked us for a side show: play waits for our answer.
+      await emit(human.socket, 'tp:sideShowAnswer', { accept: Math.random() < 0.5 });
+    } else if (snap.phase === 'play' && opts?.myTurn) {
+      // Plain human play: look on the first turn, then call; pack big stakes.
+      if (opts.canSee) await emit(human.socket, 'tp:see');
+      else if (tp().stake >= 8 * tp().boot) await emit(human.socket, 'tp:pack');
+      else await emit(human.socket, opts.bets.length ? 'tp:bet' : 'tp:pack', { double: false });
+    } else if (snap.phase === 'between-rounds') {
+      if (opts?.canRefill) await emit(human.socket, 'tp:refill');
+      if (!snap.betweenRoundAcks.includes(human.playerId)) {
+        hands++;
+        await emit(human.socket, 'tp:ackNextHand');
+      }
+    }
+    await delay(15);
+  }
+  check(hands >= 6, `six hands finished with bots (${hands})`);
+  check(botActions >= 6, `bots bet, packed or showed on their own (${botActions} moves)`);
+  check(balanced, 'coins + pot always equal the coins handed out');
+  check(human.leaks.length === 0 && !/"rank"/.test(JSON.stringify(tp().seats)), 'no hidden card reached the public snapshot');
+  await emit(human.socket, 'tp:leaveGame');
+  human.socket.close();
+}
+
 async function run() {
   await golf();
   await cabo();
+  await teenPatti();
   if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
   console.log('\nAll bot checks passed');
   process.exit(0);

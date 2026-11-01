@@ -2488,6 +2488,7 @@ class BotSocket {
   private memoryKey = '';
   private lastSeq = 0;
   private turnsThisRound = 0;
+  private tpBlindBets = 0;
 
   // -- the slice of socket.io's Socket that attachSocketHandlers() uses --
   use(fn: (packet: any[], next: (err?: Error) => void) => void) { this.middleware.push(fn); return this; }
@@ -2528,7 +2529,7 @@ class BotSocket {
     } else if (event === 'game:private') {
       const priv = payload as PrivateGameState;
       const key = `${priv.gameId}:${priv.matchNumber}:${priv.round}`;
-      if (key !== this.memoryKey) { this.memoryKey = key; this.known.clear(); this.turnsThisRound = 0; }
+      if (key !== this.memoryKey) { this.memoryKey = key; this.known.clear(); this.turnsThisRound = 0; this.tpBlindBets = 0; }
       this.priv = priv;
       // Remember any own card the server chose to show us (the opening peek).
       for (const s of priv.golfSlots) if (s.card && !s.locked) this.known.set(s.slotId, s.card);
@@ -2576,22 +2577,61 @@ class BotSocket {
   }
 
   private decide(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {
-    const golf = g.config.gameMode === 'golf';
+    const mode = g.config.gameMode;
+    const golf = mode === 'golf';
+    const tp = mode === 'teenpatti';
+    const prefix = golf ? 'golf' : tp ? 'tp' : 'cabo';
+    // Teen Patti: a bot that can't cover the pot limit refills before anything else.
+    if (tp && priv.tpOptions?.canRefill) return { event: 'tp:refill', payload: {} };
     if (g.phase === 'peek') {
       const acks = golf ? g.golf?.peekAcks : g.cabo?.peekAcks;
-      return acks?.includes(me) ? null : { event: golf ? 'golf:ackPeek' : 'cabo:ackPeek', payload: {} };
+      return acks?.includes(me) ? null : { event: `${prefix}:ackPeek`, payload: {} };
     }
     if (g.phase === 'between-rounds') {
-      return g.betweenRoundAcks?.includes(me) ? null : { event: golf ? 'golf:ackNextRound' : 'cabo:ackNextRound', payload: {} };
+      return g.betweenRoundAcks?.includes(me) ? null : { event: tp ? 'tp:ackNextHand' : `${prefix}:ackNextRound`, payload: {} };
     }
     if (g.phase === 'rematch-pending') {
-      return g.rematchAcks?.includes(me) ? null : { event: golf ? 'golf:ackRematch' : 'cabo:ackRematch', payload: {} };
+      return g.rematchAcks?.includes(me) ? null : { event: `${prefix}:ackRematch`, payload: {} };
     }
     if ((g.phase === 'play' || g.phase === 'cabo-called') && !g.paused) {
+      if (tp) return this.tpMove(g, priv);
       if (golf && g.golf?.turn === me) return this.golfMove(g, priv, me);
       if (!golf && g.cabo?.turn === me) return this.caboMove(g, priv, me);
     }
     return null;
+  }
+
+  // Teen Patti: strength = share of all 22,100 hands this one beats (a pair
+  // already beats ~75%). Pack weak hands as the stake climbs, raise strong
+  // ones, bluff now and then, and play blind for a turn or two while cheap.
+  private tpMove(g: GameSnapshot, priv: PrivateGameState): BotMove | null {
+    const table = g.tp;
+    const options = priv.tpOptions;
+    if (!table || !options) return null;
+    const cards = priv.tpCards;
+    if (priv.tpSideShowAsk) {
+      return { event: 'tp:sideShowAnswer', payload: { accept: !!cards && tpStrength(cards) >= 0.6 } };
+    }
+    if (!options.myTurn) return null;
+    const pressure = Math.log2(Math.max(1, table.stake / table.boot)); // +1 per doubling of the stake
+    const minBet = options.bets.find((b) => !b.double);
+    const raise = options.bets.find((b) => b.double);
+    if (!cards) {
+      const lookNow = options.mustSee || pressure >= 2 || this.tpBlindBets >= 1 + Math.floor(Math.random() * 2);
+      if (lookNow || !minBet) return { event: 'tp:see', payload: {} };
+      if (options.show && pressure >= 1 && Math.random() < 0.25) return { event: 'tp:show', payload: {} };
+      return { event: 'tp:bet', payload: { double: !!raise && Math.random() < 0.15 }, onOk: () => { this.tpBlindBets++; } };
+    }
+    const strength = tpStrength(cards);
+    const left = table.seats.filter((x) => x.inHand && !x.packed).length;
+    const packBelow = Math.min(0.75, 0.3 + 0.08 * pressure + 0.04 * Math.max(0, left - 2));
+    const bluff = Math.random() < 0.08;
+    if (strength < packBelow && !bluff) return { event: 'tp:pack', payload: {} };
+    if (options.show && (strength >= 0.7 || pressure >= 3)) return { event: 'tp:show', payload: {} };
+    if (options.sideShow && strength >= 0.45 && strength < 0.85 && Math.random() < 0.35) return { event: 'tp:sideShow', payload: {} };
+    if (raise && (strength >= 0.9 || bluff)) return { event: 'tp:bet', payload: { double: true } };
+    if (minBet) return { event: 'tp:bet', payload: { double: false } };
+    return { event: 'tp:pack', payload: {} };
   }
 
   private golfMove(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {

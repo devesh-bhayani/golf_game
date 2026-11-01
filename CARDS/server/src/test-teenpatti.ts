@@ -20,8 +20,13 @@ function connect(): Promise<Socket> {
   });
 }
 
-function emit(s: Socket, event: string, payload: unknown = {}): Promise<any> {
-  return new Promise((resolve) => s.emit(event, payload, resolve));
+// The server sends every seat its update before replying to the actor, but
+// another seat's update can still land a moment after the actor's reply over
+// real sockets. Settle briefly so cross-seat checks read fresh state.
+async function emit(s: Socket, event: string, payload: unknown = {}): Promise<any> {
+  const res = await new Promise((resolve) => s.emit(event, payload, resolve));
+  await delay(40);
+  return res;
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
