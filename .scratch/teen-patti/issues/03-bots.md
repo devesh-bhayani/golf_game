@@ -1,6 +1,6 @@
 # Bots for Teen Patti
 
-Status: ready-for-agent (after 02)
+Status: done (PR feat/teen-patti)
 
 `BotSocket` gains `tpMove()`:
 - Stay blind 1–2 turns at low stakes, then see.

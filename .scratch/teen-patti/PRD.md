@@ -1,6 +1,6 @@
 # Teen Patti with play coins
 
-Status: ready-for-agent (house rules agreed 2026-11-01, see Decisions)
+Status: in review (PR feat/teen-patti; house rules agreed 2026-11-01, see Decisions)
 
 ## Outcome
 

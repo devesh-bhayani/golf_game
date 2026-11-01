@@ -1,6 +1,6 @@
 # Client: create options, table, actions, results
 
-Status: ready-for-agent (after 02)
+Status: done (PR feat/teen-patti)
 
 - Create screen: "Teen Patti — bet with play coins", stake level, hands per match, side shows, blind limit.
 - `TeenPattiTable`: seat panels (coins, Blind/Seen/Packed, bet this hand, card backs or own cards when seen), center strip (pot, stake, boot, hand #), Last move line.

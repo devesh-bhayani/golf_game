@@ -1,6 +1,6 @@
 # Server: Teen Patti mode, betting engine, play coins
 
-Status: ready-for-agent (after 01)
+Status: done (PR feat/teen-patti)
 
 - `'teenpatti'` mode; `sanitizeConfig` whitelists the room options (stakes, hands, side show, blind limit, A-2-3).
 - `tp*` state, deal (boot from every seat with ≥ pot-limit coins; others sit out), dealer rotation.

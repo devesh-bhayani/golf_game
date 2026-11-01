@@ -1,6 +1,6 @@
 # Hand evaluator and bet rules (pure functions)
 
-Status: ready-for-agent
+Status: done (PR feat/teen-patti)
 
 Pure, socket-free rules in `CARDS/server/src/teenpatti.ts` (owner-approved exception to the one-file rule):
 - `evaluate(cards) -> { category, tiebreak[] }` and `compare(a, b) -> -1 | 0 | 1`. A-2-3 is the highest run, then A-K-Q down to 4-3-2.
