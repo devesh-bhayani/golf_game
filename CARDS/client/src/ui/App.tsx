@@ -2138,18 +2138,18 @@ export function App() {
               )}
               {gameMode === 'teenpatti' && (
                 <>
-                  <OptionRow label="Stakes" value={tpStakes} onChange={setTpStakes} options={[
+                  <OptionRow<'low' | 'medium' | 'high'> label="Stakes" value={tpStakes} onChange={setTpStakes} options={[
                     { value: 'low', label: 'Low', hint: 'boot 10 · start 1,000' },
                     { value: 'medium', label: 'Medium', hint: 'boot 100 · start 10,000' },
                     { value: 'high', label: 'High', hint: 'boot 1,000 · start 100,000' },
                   ]} />
-                  <OptionRow label="Hands per game" value={tpHands} onChange={setTpHands} options={[
+                  <OptionRow<number> label="Hands per game" value={tpHands} onChange={setTpHands} options={[
                     { value: 10, label: '10' }, { value: 20, label: '20' }, { value: 0, label: 'Unlimited' },
                   ]} />
-                  <OptionRow label="Side shows" value={tpSideShow} onChange={setTpSideShow} options={[
+                  <OptionRow<boolean> label="Side shows" value={tpSideShow} onChange={setTpSideShow} options={[
                     { value: true, label: 'On' }, { value: false, label: 'Off' },
                   ]} />
-                  <OptionRow label="Blind limit" value={tpBlindLimit} onChange={setTpBlindLimit} options={[
+                  <OptionRow<number> label="Blind limit" value={tpBlindLimit} onChange={setTpBlindLimit} options={[
                     { value: 0, label: 'None' }, { value: 3, label: '3 blind bets' }, { value: 4, label: '4 blind bets' },
                   ]} />
                   <p style={{ margin: 0, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400], lineHeight: 1.6 }}>
