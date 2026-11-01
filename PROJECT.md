@@ -8,6 +8,7 @@ Three game modes:
 
 - **Golf** — the flagship. Players get a grid of face-down cards (4/6/8), peek at their bottom row once, then take turns swapping/drawing to minimize their score. Full rules in [CARDS/GOLF_RULES.md](CARDS/GOLF_RULES.md), including the King bonuses (-5/-10/-20) and pair/three/four-of-a-kind combination scoring.
 - **Cabo** — a memory game. 4 cards each, peek at bottom 2, draw/swap/snap, special powers on 7/8 (peek own), 9/10 (spy opponent), J/Q (blind swap), black K (see then optionally swap). Anyone can "call Cabo" to trigger final turns. Round scores accumulate; game ends when someone passes 100; lowest total wins. Caller pays +5 penalty unless they had the lowest hand.
+- **Teen Patti** — a betting game for free play coins (never real money). Three cards each, boot into the pot, players bet blind or seen, pack, show (two left) or ask for a side show (three or more left). A pot limit of 32 boots forces a show. Coins are per room and reset each match; refills are free between hands and standings rank by net coins. Full rules in [CARDS/TEEN_PATTI_RULES.md](CARDS/TEEN_PATTI_RULES.md). Ranking and bet math are pure functions in `CARDS/server/src/teenpatti.ts`; the hand lifecycle, handlers (`tp:*`) and bot strategy live in `index.ts`.
 - **Classic** — a bare "play cards to a center pile" sandbox. Half-finished (no turn order, no win condition); see GAPS.md.
 
 Audience: friends-scale casual play. Every design decision follows from that — see "Design decisions" below.
@@ -39,13 +40,15 @@ GOLF/
 └── CARDS/
     ├── README.md              # getting started + Fly/Vercel deploy walkthrough
     ├── GOLF_RULES.md          # canonical Golf rules (matches calculateGolfScore)
+    ├── TEEN_PATTI_RULES.md    # canonical Teen Patti house rules (matches the server)
     ├── GOLF-RULES             # (dead duplicate of the above, no extension)
     ├── server/
     │   ├── fly.toml
     │   ├── package.json       # scripts: dev/build/start + all test/e2e scripts
     │   ├── tsconfig.json      # excludes every test/e2e file from the prod build
     │   └── src/
-    │       ├── index.ts       # THE server. All types, state, rules, socket handlers (~1,830 lines)
+    │       ├── index.ts       # THE server. All types, state, rules, socket handlers
+    │       ├── teenpatti.ts   # Teen Patti hand ranking + bet math (pure functions, no state)
     │       ├── e2e.ts / e2e-golf.ts / e2e-cabo.ts        # full-flow tests per mode
     │       ├── test-dealing.ts / test-dealing-golf.ts    # deck-sizing math
     │       ├── test-reaper.ts                            # abandoned-game TTL sweep
@@ -81,6 +84,7 @@ Browser (React SPA, Vercel)                Server (Node, Fly/Render)
 
 - Golf: opponent cards appear only when `revealed && locked && !peekOnly`.
 - Cabo: the public snapshot contains **only slotIds**, never cards. Your own cards arrive on a private per-socket `cabo:hand` event. Same for `golf:hand` and classic `hand:update`.
+- Teen Patti: the snapshot (`tp`) has seats, coins, bets, blind/seen/packed flags, pot and stake. Cards appear only in `tp.result.shown` after a show or pot-limit show. `game:private` carries your own `tpCards` (null while you are blind), your legal moves (`tpOptions`), side-show hands you saw (`tpKnown`) and any side-show request to answer (`tpSideShowAsk`).
 
 **Session persistence**: `createGame`/`joinGame` return `{ playerId, playerToken }`; the client stores them in localStorage. On socket connect, the client silently tries `rejoinGame { playerToken }` — this is how refresh/reconnect works. Tokens map through `tokenIndex` to (gameId, playerId), and the player record's `currentSocketId` is repointed. There is no other auth.
 

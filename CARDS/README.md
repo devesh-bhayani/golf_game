@@ -1,8 +1,8 @@
-# The Card Room — Golf & Cabo
+# The Card Room — Golf, Cabo & Teen Patti
 
-A browser card room for 2–8 friends. Create a room, share its invite link or four-digit code, and play without accounts or app installs. The lowest score wins.
+A browser card room for 2–8 friends. Create a room, share its invite link or four-digit code, and play without accounts or app installs. Golf and Cabo are won by the lowest score; Teen Patti is played for free play coins (never real money).
 
-The welcome screen includes a first-game walkthrough. **Rules & how to play** is available from the lobby, table, and results screens, with separate guides for Golf and Cabo. The canonical house rules and scoring examples are in [GOLF_RULES.md](GOLF_RULES.md).
+The welcome screen includes a first-game walkthrough. **Rules & how to play** is available from the lobby, table, and results screens, with separate guides for Golf, Cabo and Teen Patti. The canonical house rules are in [GOLF_RULES.md](GOLF_RULES.md) and [TEEN_PATTI_RULES.md](TEEN_PATTI_RULES.md).
 
 ## Run locally
 
@@ -30,6 +30,7 @@ Seats are stored per browser tab and survive refreshes. Separate tabs can join a
 
 - Golf supports 4, 6, or 8 cards, rank-based combinations, King bonuses, and extra rounds when the lowest totals tie.
 - Cabo supports peeks, spies, blind swaps, Black King decisions, snaps, and final turns after calling Cabo.
+- Teen Patti supports blind and seen betting, packs, shows, side shows (host can turn them off), an optional blind limit, and a 32-boot pot limit. Play coins are per room and reset each match; refills are free between hands, and standings rank by net coins.
 - The server sends only authorized card values. Hidden cards are not merely concealed by the interface.
 - Refresh restores the correct lobby or table and pending decisions.
 - A disconnected player has 30 seconds to return. The host role transfers to a connected player immediately. If someone stays online, an absent player leaves after the grace period.
@@ -60,15 +61,19 @@ npm run e2e:cabo
 npm run e2e:cabo:specials
 npm run test:release
 npm run test:bots
+npm run test:tp:rank
+npm run test:tp
 ```
 
 Tests accept `SERVER_URL` for a different test server. The test-hook server must not be shared with normal players; deterministic-deck suites must run sequentially.
 
 `test:release` covers hidden own-card privacy, refresh without re-peeking, one connection per seat, invalid actions, duplicate draws, disconnect readiness, host transfer, forfeits, complete Golf and Cabo matches/rematches, Golf tie-break rounds, eight-player/eight-card Golf, and a Black King decision restored after reconnect.
 
-`test:bots` covers lobby bot controls, full Golf and Cabo rounds against bots, public-snapshot privacy, bots pausing while the only human is away, and room cleanup.
+`test:bots` covers lobby bot controls, full Golf, Cabo and Teen Patti games against bots, public-snapshot privacy, bots pausing while the only human is away, and room cleanup.
 
-CI runs all ten suites and both production builds. The existing script tests do not replace final browser and real-device checks.
+`test:tp:rank` checks Teen Patti hand ranking (category counts, A-2-3 high, tie-breaks) and bet math; it needs no server. `test:tp` plays stacked Teen Patti hands: blind-player privacy, shows and show ties, side shows (accept, decline, tie), the pot-limit split, refills and net standings, the blind limit, match length, rematch, and leaving mid-hand.
+
+CI runs all twelve suites and both production builds. The existing script tests do not replace final browser and real-device checks.
 
 ## Production builds
 
