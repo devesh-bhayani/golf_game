@@ -234,14 +234,51 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   </dialog>;
 }
 
-function RulesGuide({ initialMode, onClose }: { initialMode: 'golf' | 'cabo'; onClose: () => void }) {
-  const [mode, setMode] = useState(initialMode);
+type RulesMode = 'golf' | 'cabo' | 'teenpatti';
+const MODE_NAME: Record<RulesMode, string> = { golf: 'Golf', cabo: 'Cabo', teenpatti: 'Teen Patti' };
+
+// Teen Patti hand ranking, best first, with how often each is dealt.
+const TP_RANKING: Array<[string, string, string]> = [
+  ['Trail (three of a kind)', 'A A A', '0.24%'],
+  ['Pure sequence (run, one suit)', 'Q♠ K♠ A♠', '0.22%'],
+  ['Sequence (run)', '4♦ 5♣ 6♥', '3.26%'],
+  ['Color (one suit)', '2♥ 7♥ J♥', '4.96%'],
+  ['Pair', '9 9 K', '16.94%'],
+  ['High card', 'A 10 4', '74.39%'],
+];
+
+function TeenPattiRules() {
+  return <>
+    <p style={{ fontSize: 18, color: theme.colors.primary[300], lineHeight: 1.6 }}>Bet, bluff, and show. Played with play coins only, never real money.</p>
+    <p style={{ color: theme.colors.dark[300] }}>2–8 players · No accounts · These are our house rules.</p>
+    <ol style={{ paddingLeft: 22, lineHeight: 1.85 }}>
+      <li><strong>Everyone pays the boot.</strong> Each hand, every player puts the boot into the pot and gets three cards face down. The dealer moves one seat each hand; the player after the dealer starts.</li>
+      <li><strong>Blind or seen.</strong> You start blind. Blind bets are 1× or 2× the current stake. Press <em>See cards</em> whenever you like; from then on you bet 2× or 4× (chaal). After a blind bet the stake becomes that bet; after a seen bet it becomes half of it.</li>
+      <li><strong>Pack</strong> on your turn to fold. Coins you already bet stay in the pot.</li>
+      <li><strong>Show.</strong> When two players are left, a blind player can pay 1× the stake for a show. A seen player pays 2×, and only against another seen player. The higher hand wins; a tie goes against the player who paid.</li>
+      <li><strong>Side show.</strong> With three or more left, a seen player can bet the minimum chaal and ask the previous seen player to compare hands privately. If they accept, the lower hand packs (a tie packs the asker). They may decline. The host can turn side shows off.</li>
+      <li><strong>Pot limit.</strong> When the pot reaches 32 boots, every remaining hand is shown and the best wins. Exact ties split the pot.</li>
+    </ol>
+    <h3>Hand ranking (best first)</h3>
+    <div style={{ display: 'grid', gap: 6 }}>
+      {TP_RANKING.map(([name, example, chance]) => <div key={name} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr) auto', gap: 12, alignItems: 'center', padding: '10px 12px', background: theme.colors.dark[900], borderRadius: 10 }}>
+        <strong>{name}</strong><span style={{ color: theme.colors.primary[300] }}>{example}</span><span style={{ color: theme.colors.dark[300], fontVariantNumeric: 'tabular-nums' }}>{chance}</span>
+      </div>)}
+    </div>
+    <p style={{ lineHeight: 1.7 }}>In our house rules <strong>A-2-3 is the highest run</strong>, then A-K-Q, K-Q-J, down to 4-3-2. K-A-2 is not a run. Colors and high cards compare the top card, then the next. Pairs compare the pair, then the odd card. Suits never rank.</p>
+    <h3>Play coins</h3>
+    <p style={{ lineHeight: 1.7 }}>Everyone starts with 100 boots of coins. You need at least the pot limit to be dealt in, so nobody runs short in the middle of a hand. Running low? Refill for free between hands. Standings count <strong>net</strong> coins: what you hold minus everything you were given. Coins cannot be bought or cashed out, and they reset every match.</p>
+  </>;
+}
+
+function RulesGuide({ initialMode, onClose }: { initialMode: RulesMode; onClose: () => void }) {
+  const [mode, setMode] = useState<RulesMode>(initialMode);
   const golf = mode === 'golf';
   return <Modal title="Rules & how to play" onClose={onClose}>
-    <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-      <Btn variant={golf ? 'primary' : 'outline'} aria-pressed={golf} onClick={() => setMode('golf')}>Golf</Btn>
-      <Btn variant={!golf ? 'primary' : 'outline'} aria-pressed={!golf} onClick={() => setMode('cabo')}>Cabo</Btn>
+    <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+      {(['golf', 'cabo', 'teenpatti'] as RulesMode[]).map((m) => <Btn key={m} variant={mode === m ? 'primary' : 'outline'} aria-pressed={mode === m} onClick={() => setMode(m)}>{MODE_NAME[m]}</Btn>)}
     </div>
+    {mode === 'teenpatti' ? <TeenPattiRules /> : <>
     <p style={{ fontSize: 18, color: theme.colors.primary[300], lineHeight: 1.6 }}>
       {golf ? 'A little memory. A little risk. The lowest total wins.' : 'Remember your cards, use special powers, and call Cabo when you think you are lowest.'}
     </p>
@@ -279,9 +316,10 @@ function RulesGuide({ initialMode, onClose }: { initialMode: 'golf' | 'cabo'; on
       <h3>Snap!</h3>
       <p style={{ lineHeight: 1.7 }}>During play, anyone can select Snap and choose a card whose <strong>rank</strong> matches the discard. A correct snap removes that card. A wrong snap adds up to two penalty cards, limited by cards available. After snapping an opponent’s card, you may slide one of yours into their hand or decline. Snaps wait while a Black King decision is being made.</p>
     </>}
+    </>}
     <h3>If someone disconnects</h3>
     <p style={{ lineHeight: 1.7 }}>Refresh to rejoin from the same tab. A disconnected player has 30 seconds to return before leaving the room; the host role passes to a connected player. With fewer than two connected players, play pauses. If only one player remains in the room, the match returns to the lobby. Leaving during a match forfeits your place.</p>
-    <p style={{ color: theme.colors.dark[300], lineHeight: 1.7 }}>Rooms last while this server is running. If a room expires or the server restarts, create a new one. A depleted draw pile reshuffles the discard pile while keeping its top card.</p>
+    <p style={{ color: theme.colors.dark[300], lineHeight: 1.7 }}>Rooms last while this server is running. If a room expires or the server restarts, create a new one.{mode !== 'teenpatti' && ' A depleted draw pile reshuffles the discard pile while keeping its top card.'}</p>
     <Btn onClick={onClose} style={{ width: '100%', marginTop: 16 }}>Got it — let’s play</Btn>
   </Modal>;
 }
@@ -291,7 +329,7 @@ function FirstGameGuide({ onRules }: { onRules: () => void }) {
     <h2 id="first-game-heading" style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: 26, marginBottom: 8 }}>Your first game starts here</h2>
     <p style={{ color: theme.colors.dark[300], lineHeight: 1.6 }}>New to Golf or Cabo? Both are memory games where <strong>the lowest score wins.</strong></p>
     <div className="guide-grid">
-      {[["01", "Make a room", "Choose Golf for a simple start, or Cabo for special powers."], ["02", "Bring your friends", "Share the invite link so everyone joins from their own phone or laptop. Alone? Add bots and play right away."], ["03", "Peek, play, repeat", "Remember your cards, take turns, and see who finishes with the fewest points."]].map(([n, title, text]) => <div key={n} style={{ padding: 16, background: theme.colors.dark[800], border: `1px solid ${theme.colors.dark[700]}`, borderRadius: 14 }}>
+      {[["01", "Make a room", "Golf for a simple start, Cabo for special powers, or Teen Patti to bet with play coins."], ["02", "Bring your friends", "Share the invite link so everyone joins from their own phone or laptop. Alone? Add bots and play right away."], ["03", "Peek, play, repeat", "Remember your cards, take turns, and see who finishes with the fewest points."]].map(([n, title, text]) => <div key={n} style={{ padding: 16, background: theme.colors.dark[800], border: `1px solid ${theme.colors.dark[700]}`, borderRadius: 14 }}>
         <span style={{ color: theme.colors.primary[400], fontSize: 13 }}>{n}</span><h3 style={{ margin: '8px 0' }}>{title}</h3><p style={{ color: theme.colors.dark[300], lineHeight: 1.6, margin: 0, fontSize: 14 }}>{text}</p>
       </div>)}
     </div>
@@ -1495,6 +1533,319 @@ function CaboTable({ game, playerId, mySlots, socket, pendingDraw, setPendingDra
   );
 }
 
+// ---- Teen Patti ----
+// Renders only what the server sends: the public `tp` block, and in the
+// private state your own cards (once seen), your legal moves (tpOptions) and
+// any side-show request. No Teen Patti rule is computed here.
+
+const coins = (n: number) => n.toLocaleString('en-US');
+
+function tpLobbySummary(config: GameSnapshot['config']) {
+  const stakes = { low: 'low stakes', medium: 'medium stakes', high: 'high stakes' }[config.tpStakes ?? 'medium'];
+  const hands = config.tpHands ? `${config.tpHands} hands` : 'unlimited hands';
+  const extras = [config.tpSideShow === false ? 'no side shows' : 'side shows on', config.tpBlindLimit ? `see after ${config.tpBlindLimit} blind bets` : ''].filter(Boolean);
+  return `Teen Patti · ${stakes} · ${hands} · ${extras.join(' · ')}`;
+}
+
+// A row of toggle buttons for a create-screen option.
+function OptionRow<T extends string | number | boolean>({ label, value, onChange, options }: {
+  label: string; value: T; onChange: (v: T) => void; options: Array<{ value: T; label: string; hint?: string }>;
+}) {
+  return (
+    <div role="group" aria-label={label}>
+      <div style={{ display: 'block', fontSize: theme.typography.fontSize.xs, fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[400], marginBottom: theme.spacing.sm, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${options.length}, 1fr)`, gap: theme.spacing.sm }}>
+        {options.map((o) => {
+          const on = o.value === value;
+          return (
+            <button key={String(o.value)} type="button" aria-pressed={on} onClick={() => onChange(o.value)} style={{
+              padding: `${theme.spacing.md} ${theme.spacing.sm}`, background: on ? theme.colors.primary[500] : theme.colors.dark[900],
+              border: `1px solid ${on ? theme.colors.primary[500] : theme.colors.dark[600]}`, borderRadius: theme.borderRadius.lg,
+              color: on ? '#1d1607' : theme.colors.dark[200], fontWeight: theme.typography.fontWeight.semibold, fontSize: theme.typography.fontSize.sm,
+              fontFamily: theme.typography.fontFamily, cursor: 'pointer', transition: 'all 0.15s ease', lineHeight: 1.3,
+            }}>
+              {o.label}
+              {o.hint && <span style={{ display: 'block', fontWeight: 400, fontSize: theme.typography.fontSize.xs, color: on ? '#3a2c0c' : theme.colors.dark[400], marginTop: 2 }}>{o.hint}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'gold' | 'blue' | 'muted' }) {
+  const tones = {
+    neutral: { color: theme.colors.dark[200], border: theme.colors.dark[600], background: theme.colors.dark[700] },
+    gold: { color: '#1d1607', border: theme.colors.primary[500], background: theme.colors.primary[500] },
+    blue: { color: theme.colors.secondary[300], border: theme.colors.secondary[700], background: 'transparent' },
+    muted: { color: theme.colors.dark[400], border: theme.colors.dark[600], background: 'transparent' },
+  }[tone];
+  return <span style={{ fontSize: theme.typography.fontSize.xs, fontWeight: 600, padding: '2px 9px', borderRadius: 999, border: `1px solid ${tones.border}`, background: tones.background, color: tones.color, whiteSpace: 'nowrap' }}>{children}</span>;
+}
+
+function TeenPattiTable({ game, playerId, priv, socket }: {
+  game: GameSnapshot; playerId: string | null; priv: PrivateGameState | null; socket: Socket | null;
+}) {
+  const tp = game.tp!;
+  const windowWidth = useWindowWidth();
+  const isMobile = windowWidth < 640;
+  const options = priv?.tpOptions ?? null;
+  const ask = priv?.tpSideShowAsk ?? null;
+  const known = priv?.tpKnown ?? [];
+  const nameOf = (pid: string | null | undefined) => game.players.find((p) => p.playerId === pid)?.displayName ?? 'Someone';
+  const emit = (event: string, payload: any = {}) => request(socket, event, payload, (r: any) => { if (r?.error) notify(r.error); });
+  const me = tp.seats.find((s) => s.playerId === playerId);
+  const playing = game.phase === 'play';
+  const recent = game.lastAction?.actorId;
+  const isHost = game.hostId === playerId;
+
+  // 1s tick while anyone is disconnected so the kick countdown re-renders.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!game.players.some((p) => !p.connected && p.disconnectedAt)) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [game.players]);
+  const seatMin = 3 * 68 + 2 * 6 + 2 * (isMobile ? 8 : 12) + 4;
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: theme.typography.fontFamilyDisplay, fontWeight: 600, fontSize: theme.typography.fontSize.xl, color: theme.colors.dark[50] }}>
+            Teen Patti <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base }}>· hand {tp.handNumber}{tp.targetHands ? ` of ${tp.targetHands}` : ''}</span>
+          </span>
+          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Code <strong style={{ color: theme.colors.dark[200], letterSpacing: '0.1em' }}>{game.code}</strong></span>
+        </div>
+        <div style={{ display: 'flex', gap: 18, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <span style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>Pot <strong style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: 26, color: theme.colors.primary[400], marginLeft: 4 }}>{coins(tp.pot)}</strong></span>
+          <span style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>Stake <strong style={{ color: theme.colors.dark[100] }}>{coins(tp.stake)}</strong></span>
+          <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Boot {coins(tp.boot)} · limit {coins(tp.potLimit)}</span>
+        </div>
+      </div>
+
+      <LastMove game={game} playerId={playerId} />
+
+      {tp.sideShow && tp.sideShow.to !== playerId && (
+        <Panel role="status" style={{ padding: theme.spacing.lg, border: `1px solid ${theme.colors.secondary[600]}` }}>
+          <span style={{ color: theme.colors.secondary[300] }}>{tp.sideShow.from === playerId ? 'You' : nameOf(tp.sideShow.from)} asked {nameOf(tp.sideShow.to)} for a side show. Waiting for an answer…</span>
+        </Panel>
+      )}
+
+      <div style={{ display: 'grid', gap: isMobile ? 10 : 18, gridTemplateColumns: `repeat(auto-fill, minmax(${seatMin}px, 1fr))`, alignItems: 'start' }}>
+        {rotateToMe(tp.seats, playerId).map((seat) => {
+          const isMe = seat.playerId === playerId;
+          const isTurn = playing && tp.turn === seat.playerId;
+          const player = game.players.find((p) => p.playerId === seat.playerId);
+          const seenCards = isMe ? priv?.tpCards : known.find((k) => k.playerId === seat.playerId)?.cards;
+          const status = !seat.inHand ? 'Sitting out' : seat.packed ? 'Packed' : seat.seen ? 'Seen' : 'Blind';
+          // Phones: other players' face-down hands collapse to one short row so
+          // eight seats fit without a long scroll.
+          if (isMobile && !isMe && !seenCards) return (
+            <div key={seat.playerId} style={{
+              padding: '8px 10px', borderRadius: theme.borderRadius.lg,
+              border: `2px solid ${isTurn ? theme.colors.dark[500] : 'transparent'}`,
+              background: isTurn ? 'rgba(245, 244, 236, 0.04)' : 'transparent',
+              opacity: seat.packed || !seat.inHand ? 0.6 : player && !player.connected ? 0.7 : 1,
+              ...(recent === seat.playerId && !isTurn ? { outline: `2px dashed ${theme.colors.primary[300]}55`, outlineOffset: 2 } : {}),
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, color: theme.colors.dark[200] }}>{player?.displayName}</span>
+                {tp.dealerId === seat.playerId && <Chip tone="muted">Dealer</Chip>}
+                {isTurn && <Chip tone="gold">Turn</Chip>}
+                <Chip tone={status === 'Seen' ? 'blue' : 'neutral'}>{status}</Chip>
+                {player && !player.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[400] }}>disconnected</span>}
+                {isHost && player && !player.connected && player.disconnectedAt && Date.now() - player.disconnectedAt >= 30_000 && <Btn size="sm" variant="error" onClick={() => emit('tp:kickPlayer', { playerId: seat.playerId })}>Kick</Btn>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, fontSize: theme.typography.fontSize.sm, fontVariantNumeric: 'tabular-nums' }}>
+                {seat.inHand && <span aria-hidden="true" style={{ display: 'inline-flex', gap: 3 }}>{[0, 1, 2].map((i) => <span key={i} style={{ width: 14, height: 20, borderRadius: 3, border: `1px solid ${theme.colors.primary[700]}`, background: theme.colors.dark[700] }} />)}</span>}
+                <span style={{ color: theme.colors.dark[200] }}>{coins(seat.coins)} coins</span>
+                {seat.inHand && <span style={{ color: theme.colors.dark[400], marginLeft: 'auto' }}>in pot {coins(seat.bet)}</span>}
+              </div>
+            </div>
+          );
+          return (
+            <div key={seat.playerId} style={{
+              padding: isMobile ? 8 : 12, borderRadius: theme.borderRadius.xl,
+              border: `2px solid ${isTurn ? (isMe ? theme.colors.primary[500] : theme.colors.dark[500]) : 'transparent'}`,
+              boxShadow: isTurn && isMe ? theme.shadows.glow : 'none',
+              opacity: seat.packed || !seat.inHand ? 0.6 : player && !player.connected ? 0.7 : 1,
+              transition: 'all 0.3s ease-in-out',
+              ...(recent === seat.playerId && !isTurn ? { outline: `2px dashed ${theme.colors.primary[300]}55`, outlineOffset: 2 } : {}),
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                <span style={{ fontWeight: 600, color: isMe ? theme.colors.primary[400] : theme.colors.dark[200] }}>{player?.displayName}{isMe ? ' (you)' : ''}</span>
+                {tp.dealerId === seat.playerId && <Chip tone="muted">Dealer</Chip>}
+                {isTurn && <Chip tone="gold">Turn</Chip>}
+                <Chip tone={status === 'Seen' ? 'blue' : 'neutral'}>{status}</Chip>
+                {player && !player.connected && <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[400] }}>disconnected</span>}
+                {isHost && !isMe && player && !player.connected && player.disconnectedAt && (Date.now() - player.disconnectedAt >= 30_000
+                  ? <Btn size="sm" variant="error" onClick={() => emit('tp:kickPlayer', { playerId: seat.playerId })}>Kick</Btn>
+                  : <span style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.dark[500] }}>kick in {Math.max(0, 30 - Math.floor((Date.now() - player.disconnectedAt) / 1000))}s</span>)}
+              </div>
+              <div style={{ display: 'flex', gap: 6, minHeight: 88, alignItems: 'center' }}>
+                {seat.inHand
+                  ? (seenCards ?? [null, null, null]).map((c, i) => <div key={i}>{c ? <CardView card={c} size="sm" hover={false} /> : <CardBack size="sm" />}</div>)
+                  : <span style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.sm }}>Not dealt in this hand</span>}
+              </div>
+              {!isMe && seenCards && <div style={{ fontSize: theme.typography.fontSize.xs, color: theme.colors.secondary[300], marginTop: 6 }}>You saw these in a side show</div>}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: theme.typography.fontSize.sm, fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ color: theme.colors.dark[200] }}>{coins(seat.coins)} coins</span>
+                {seat.inHand && <span style={{ color: theme.colors.dark[400] }}>in pot {coins(seat.bet)}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {playing && me && (
+        <Panel style={{ padding: isMobile ? theme.spacing.lg : theme.spacing['2xl'], ...(isMobile ? stickyTurnPanel : {}) }}>
+          {ask ? (
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div style={{ fontWeight: 600, color: theme.colors.secondary[300] }}>{nameOf(ask.from)} asked you for a side show</div>
+              <div style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm, lineHeight: 1.6 }}>Accept to compare hands privately: the lower hand packs, and on a tie {nameOf(ask.from)} packs. Decline and play carries on.</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <Btn variant="secondary" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:sideShowAnswer', { accept: true })}>Accept side show</Btn>
+                <Btn variant="outline" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:sideShowAnswer', { accept: false })}>Decline</Btn>
+              </div>
+            </div>
+          ) : options?.myTurn ? (
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div style={{ fontWeight: 600, color: theme.colors.primary[400] }}>Your turn <span style={{ color: theme.colors.dark[400], fontWeight: 400 }}>· {me.seen ? 'seen' : 'playing blind'} · pot {coins(tp.pot)} · stake {coins(tp.stake)}</span></div>
+              {options.mustSee && <div style={{ color: theme.colors.warning[400], fontSize: theme.typography.fontSize.sm }}>Blind limit reached: look at your cards to keep playing.</div>}
+              {options.bets.some((b) => tp.pot + b.amount >= tp.potLimit) && <div style={{ color: theme.colors.primary[300], fontSize: theme.typography.fontSize.sm }}>The pot limit is {coins(tp.potLimit)}. A bet that reaches it ends the hand: every hand still in is shown.</div>}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {options.canSee && <Btn variant="outline" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:see')}>See cards</Btn>}
+                {options.bets.map((b) => <Btn key={String(b.double)} variant={b.double ? 'warning' : 'primary'} size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:bet', { double: b.double })}>{b.label} {coins(b.amount)}</Btn>)}
+                {options.show && <Btn variant="success" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:show')}>Show · {coins(options.show.cost)}</Btn>}
+                {options.sideShow && <Btn variant="secondary" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:sideShow')}>Side show with {nameOf(options.sideShow.target)} · {coins(options.sideShow.cost)}</Btn>}
+                <Btn variant="ghost" size={isMobile ? 'sm' : 'md'} onClick={() => emit('tp:pack')}>Pack</Btn>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+              <span style={{ color: theme.colors.dark[300] }}>
+                {!me.inHand ? 'You are sitting out this hand.' : me.packed ? 'You packed this hand.' : `Waiting for ${nameOf(tp.turn)}…`}
+                <span style={{ color: theme.colors.dark[400] }}> · pot {coins(tp.pot)}</span>
+              </span>
+              <div style={{ display: 'flex', gap: 10 }}>
+                {options?.canSee && <Btn variant="outline" size="sm" onClick={() => emit('tp:see')}>See cards</Btn>}
+                {options?.canRefill && <Btn size="sm" onClick={() => emit('tp:refill')}>Refill to {coins(tp.start)}</Btn>}
+              </div>
+            </div>
+          )}
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function TpResultModal({ game, playerId, priv, phase, onAckNextRound, onAckRematch, onLeave, onRules, socket }: {
+  game: GameSnapshot; playerId: string | null; priv: PrivateGameState | null; phase: GamePhase; socket: Socket | null;
+  onAckNextRound: () => void; onAckRematch: () => void; onLeave: () => void; onRules: () => void;
+}) {
+  const tp = game.tp!;
+  const result = tp.result;
+  const isEnd = phase === 'rematch-pending';
+  const acks = isEnd ? (game.rematchAcks ?? []) : (game.betweenRoundAcks ?? []);
+  const alreadyAcked = playerId ? acks.includes(playerId) : false;
+  const nameOf = (pid: string) => game.players.find((p) => p.playerId === pid)?.displayName ?? 'Someone';
+  const me = tp.seats.find((s) => s.playerId === playerId);
+  const myCards = priv?.tpCards;
+  const iWasShown = result?.shown.some((h) => h.playerId === playerId);
+  const winners = result?.winners ?? [];
+  const how = result?.how === 'show' ? 'won the show' : result?.how === 'pot-limit' ? 'had the best hand when the pot limit was reached' : 'stayed in while everyone else packed';
+  const standings = isEnd && tp.leaderboard ? tp.leaderboard.map((r) => r.playerId) : tp.seats.map((s) => s.playerId);
+
+  return (
+    <>
+      {isEnd && <Confetti />}
+      <Modal title={isEnd ? 'Game over' : `Hand ${result?.handNumber ?? tp.handNumber} result`}>
+        <div className="fade-in">
+          {result && (
+            <div style={{ marginBottom: theme.spacing['2xl'], padding: theme.spacing.lg, background: 'rgba(209, 168, 69, 0.12)', border: `1px solid ${theme.colors.primary[700]}`, borderRadius: theme.borderRadius.lg }}>
+              <strong style={{ color: theme.colors.primary[400] }}>{winners.map((w) => (w === playerId ? 'You' : nameOf(w))).join(' and ')}</strong>
+              <span style={{ color: theme.colors.dark[200] }}> {winners.length > 1 ? `split ${coins(result.pot)} coins: tied for the best hand.` : `won ${coins(result.pot)} coins: ${how}.`}</span>
+            </div>
+          )}
+          {result && result.shown.length > 0 && (
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', marginBottom: theme.spacing['2xl'] }}>
+              {[...result.shown].sort((a, b) => Number(winners.includes(b.playerId)) - Number(winners.includes(a.playerId))).map((h) => (
+                <div key={h.playerId} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 6 }}>{h.cards.map((c) => <CardView key={c.cardId} card={c} size="sm" hover={false} />)}</div>
+                  <div>
+                    <div style={{ fontWeight: 600, color: winners.includes(h.playerId) ? theme.colors.primary[400] : theme.colors.dark[200] }}>{h.playerId === playerId ? 'You' : nameOf(h.playerId)}{winners.includes(h.playerId) ? ' ★' : ''}</div>
+                    <div style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>{h.hand}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {myCards && !iWasShown && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: theme.spacing['2xl'] }}>
+              <div style={{ display: 'flex', gap: 6 }}>{myCards.map((c) => <CardView key={c.cardId} card={c} size="sm" hover={false} />)}</div>
+              <span style={{ color: theme.colors.dark[300], fontSize: theme.typography.fontSize.sm }}>Your hand this time (only you can see it)</span>
+            </div>
+          )}
+          <div style={{ overflowX: 'auto', marginBottom: theme.spacing['2xl'] }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[200], fontVariantNumeric: 'tabular-nums' }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${theme.colors.dark[600]}` }}>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', color: theme.colors.dark[400] }}>Player</th>
+                  <th style={{ textAlign: 'right', padding: '6px 8px', color: theme.colors.dark[400] }}>This hand</th>
+                  <th style={{ textAlign: 'right', padding: '6px 8px', color: theme.colors.dark[400] }}>Coins</th>
+                  <th style={{ textAlign: 'right', padding: '6px 8px', color: theme.colors.dark[300], fontWeight: 700 }}>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {standings.map((pid) => {
+                  const seat = tp.seats.find((s) => s.playerId === pid);
+                  if (!seat) return null;
+                  const delta = result?.deltas[pid] ?? 0;
+                  const top = isEnd && tp.leaderboard?.find((r) => r.playerId === pid)?.rank === 1;
+                  return (
+                    <tr key={pid} style={{ borderBottom: `1px solid ${theme.colors.dark[700]}`, background: top ? 'rgba(209, 168, 69, 0.08)' : 'transparent' }}>
+                      <td style={{ padding: '6px 8px', color: pid === playerId ? theme.colors.primary[400] : theme.colors.dark[200] }}>{nameOf(pid)}{pid === playerId ? ' (you)' : ''}{top ? ' ★' : ''}{seat.refills ? <span style={{ color: theme.colors.dark[400] }}> · {seat.refills} refill{seat.refills > 1 ? 's' : ''}</span> : null}</td>
+                      <td style={{ textAlign: 'right', padding: '6px 8px', color: delta > 0 ? theme.colors.success[400] : delta < 0 ? theme.colors.error[400] : theme.colors.dark[400] }}>{delta > 0 ? '+' : ''}{coins(delta)}</td>
+                      <td style={{ textAlign: 'right', padding: '6px 8px' }}>{coins(seat.coins)}</td>
+                      <td style={{ textAlign: 'right', padding: '6px 8px', fontWeight: 700, color: theme.colors.dark[100] }}>{seat.net > 0 ? '+' : ''}{coins(seat.net)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {game.notice && <p role="status" style={{ color: theme.colors.primary[300] }}>{game.notice}</p>}
+          {me && priv?.tpOptions?.canRefill && (
+            <Panel style={{ padding: theme.spacing.lg, marginBottom: theme.spacing['2xl'], display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <span style={{ color: theme.colors.dark[200] }}>You need {coins(tp.potLimit)} coins to be dealt in. Refills are free: play coins only.</span>
+              <Btn size="sm" onClick={() => request(socket, 'tp:refill', {}, (r: any) => { if (r?.error) notify(r.error); })}>Refill to {coins(tp.start)}</Btn>
+            </Panel>
+          )}
+          <div style={{ marginBottom: theme.spacing['2xl'] }}>
+            <div style={{ fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400], marginBottom: theme.spacing.sm }}>Ready</div>
+            <div style={{ display: 'flex', gap: theme.spacing.sm, flexWrap: 'wrap' }}>
+              {game.players.map((p) => (
+                <span key={p.playerId} style={{ padding: `${theme.spacing.xs} ${theme.spacing.md}`, borderRadius: theme.borderRadius.lg, fontSize: theme.typography.fontSize.sm, background: acks.includes(p.playerId) ? `${theme.colors.success[600]}55` : theme.colors.dark[700], color: acks.includes(p.playerId) ? theme.colors.success[500] : theme.colors.dark[400], border: `1px solid ${acks.includes(p.playerId) ? theme.colors.success[500] : theme.colors.dark[600]}` }}>
+                  {acks.includes(p.playerId) ? '✓ ' : ''}{p.displayName}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div style={modalActions}>
+            <Btn variant="ghost" onClick={onRules}>Rules & how to play</Btn>
+            <Btn variant="outline" onClick={onLeave}>Leave room</Btn>
+            <Btn variant="success" onClick={isEnd ? onAckRematch : onAckNextRound} disabled={alreadyAcked}>
+              {alreadyAcked ? 'Waiting…' : isEnd ? 'Play again' : 'Next hand'}
+            </Btn>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
 // ---- Main App ----
 
 export function App() {
@@ -1521,7 +1872,11 @@ export function App() {
   const [playerToken, setPlayerToken] = useState<string | null>(null);
   const [hand, setHand] = useState<CardT[]>([]);
   const [cardsPerPlayer, setCardsPerPlayer] = useState(4);
-  const [gameMode, setGameMode] = useState<'classic' | 'golf' | 'cabo'>('golf');
+  const [gameMode, setGameMode] = useState<'classic' | 'golf' | 'cabo' | 'teenpatti'>('golf');
+  const [tpStakes, setTpStakes] = useState<'low' | 'medium' | 'high'>('medium');
+  const [tpHands, setTpHands] = useState(10);
+  const [tpSideShow, setTpSideShow] = useState(true);
+  const [tpBlindLimit, setTpBlindLimit] = useState(0);
   const [myGolfSlots, setMyGolfSlots] = useState<Array<{ slotId: string; card: CardT | null; revealed: boolean; locked: boolean; peekOnly?: boolean }> | null>(null);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [pendingDraw, setPendingDraw] = useState<CardT | null>(null);
@@ -1607,6 +1962,7 @@ export function App() {
   const phase = game?.phase;
   const isGolf = game?.config.gameMode === 'golf';
   const isCabo = game?.config.gameMode === 'cabo';
+  const isTp = game?.config.gameMode === 'teenpatti';
   const isHost = playerId === game?.hostId;
 
   function createGame() {
@@ -1616,8 +1972,9 @@ export function App() {
       maxPlayers: 8,
       totalCardsPerDeck: 52,
       numberOfDecks: 1,
-      cardsPerPlayer: gameMode === 'cabo' ? 4 : cardsPerPlayer,
+      cardsPerPlayer: gameMode === 'cabo' ? 4 : gameMode === 'teenpatti' ? 3 : cardsPerPlayer,
       gameMode,
+      ...(gameMode === 'teenpatti' ? { tpStakes, tpHands, tpSideShow, tpBlindLimit } : {}),
     };
     request(socket, 'createGame', { displayName, config }, (res: any) => {
       setBusy(false);
@@ -1658,17 +2015,17 @@ export function App() {
   }
 
   function ackNextRound() {
-    const event = isCabo ? 'cabo:ackNextRound' : 'golf:ackNextRound';
+    const event = isTp ? 'tp:ackNextHand' : isCabo ? 'cabo:ackNextRound' : 'golf:ackNextRound';
     request(socket, event, {}, (res: any) => { if (res?.error) notify(res.error); });
   }
 
   function ackRematch() {
-    const event = isCabo ? 'cabo:ackRematch' : 'golf:ackRematch';
+    const event = isTp ? 'tp:ackRematch' : isCabo ? 'cabo:ackRematch' : 'golf:ackRematch';
     request(socket, event, {}, (res: any) => { if (res?.error) notify(res.error); });
   }
 
   function leaveGame() {
-    const event = isCabo ? 'cabo:leaveGame' : 'golf:leaveGame';
+    const event = isTp ? 'tp:leaveGame' : isCabo ? 'cabo:leaveGame' : 'golf:leaveGame';
     request(socket, event, {}, (res: any) => {
       if (res?.error) return notify(res.error);
       clearSession(); setPrivateState(null); setConfirmLeave(false);
@@ -1741,7 +2098,7 @@ export function App() {
           <div style={{ textAlign: 'center', marginBottom: theme.spacing['4xl'] }}>
             <div aria-hidden="true" style={{ color: theme.colors.primary[500], fontSize: theme.typography.fontSize.lg, letterSpacing: '0.5em', marginBottom: theme.spacing.md, paddingLeft: '0.5em' }}>♠ ♥ ♦ ♣</div>
             <h1 style={{ fontFamily: theme.typography.fontFamilyDisplay, fontSize: theme.typography.fontSize['4xl'], fontWeight: theme.typography.fontWeight.semibold, color: theme.colors.dark[50], margin: `0 0 ${theme.spacing.md}`, letterSpacing: '-0.01em', lineHeight: theme.typography.lineHeight.tight }}>A good hand. A better evening.</h1>
-            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf & Cabo · 2–8 players · friends or bots</p>
+            <p style={{ color: theme.colors.dark[400], fontSize: theme.typography.fontSize.base, margin: 0 }}>Golf, Cabo & Teen Patti · 2–8 players · friends or bots</p>
           </div>
           <Panel style={{ padding: theme.spacing['3xl'], marginBottom: theme.spacing['2xl'] }}>
             <div style={{ marginBottom: theme.spacing['2xl'] }}>
@@ -1773,17 +2130,18 @@ export function App() {
               <div>
                 <label htmlFor="game-mode" style={labelStyle}>Game mode</label>
                 <select id="game-mode" value={gameMode} onChange={(e) => {
-                  const m = e.target.value as 'classic' | 'golf' | 'cabo';
+                  const m = e.target.value as 'classic' | 'golf' | 'cabo' | 'teenpatti';
                   setGameMode(m);
                   if (m === 'golf' && ![4,6,8].includes(cardsPerPlayer)) setCardsPerPlayer(4);
                 }} style={{ ...inputStyle, cursor: 'pointer' }}>
                   <option value="golf">Golf — memory & matching ranks</option>
                   <option value="cabo">Cabo — powers & quick reactions</option>
+                  <option value="teenpatti">Teen Patti — bet with play coins</option>
                   {/* classic hidden: half-finished (no turns, no game end) — GAPS.md #1.
                       Server handlers + table view kept for rejoin safety. */}
                 </select>
               </div>
-              {gameMode !== 'cabo' && (
+              {gameMode !== 'cabo' && gameMode !== 'teenpatti' && (
                 <div>
                   <label style={labelStyle}>Cards Per Player</label>
                   {gameMode === 'golf' ? (
@@ -1804,6 +2162,27 @@ export function App() {
                 <p style={{ margin: 0, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>
                   Cabo always uses 4 cards per player. Game ends when any player exceeds 100 cumulative points.
                 </p>
+              )}
+              {gameMode === 'teenpatti' && (
+                <>
+                  <OptionRow<'low' | 'medium' | 'high'> label="Stakes" value={tpStakes} onChange={setTpStakes} options={[
+                    { value: 'low', label: 'Low', hint: 'boot 10 · start 1,000' },
+                    { value: 'medium', label: 'Medium', hint: 'boot 100 · start 10,000' },
+                    { value: 'high', label: 'High', hint: 'boot 1,000 · start 100,000' },
+                  ]} />
+                  <OptionRow<number> label="Hands per game" value={tpHands} onChange={setTpHands} options={[
+                    { value: 10, label: '10' }, { value: 20, label: '20' }, { value: 0, label: 'Unlimited' },
+                  ]} />
+                  <OptionRow<boolean> label="Side shows" value={tpSideShow} onChange={setTpSideShow} options={[
+                    { value: true, label: 'On' }, { value: false, label: 'Off' },
+                  ]} />
+                  <OptionRow<number> label="Blind limit" value={tpBlindLimit} onChange={setTpBlindLimit} options={[
+                    { value: 0, label: 'None' }, { value: 3, label: '3 blind bets' }, { value: 4, label: '4 blind bets' },
+                  ]} />
+                  <p style={{ margin: 0, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400], lineHeight: 1.6 }}>
+                    Everyone gets free play coins. No real money, ever. Run low and you can refill between hands.
+                  </p>
+                </>
               )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: theme.spacing.lg, marginTop: theme.spacing.lg }}>
                 <Btn variant="outline" onClick={() => setView('landing')}>Back</Btn>
@@ -1855,7 +2234,10 @@ export function App() {
             </div>
 
             <div style={{ marginTop: theme.spacing.lg, fontSize: theme.typography.fontSize.sm, color: theme.colors.dark[400] }}>
-              {game.config.gameMode === 'golf' ? `Golf · ${game.config.cardsPerPlayer} cards per player` : game.config.gameMode === 'cabo' ? 'Cabo · 4 cards · first past 100 loses' : 'Classic'}
+              {game.config.gameMode === 'golf' ? `Golf · ${game.config.cardsPerPlayer} cards per player`
+                : game.config.gameMode === 'cabo' ? 'Cabo · 4 cards · first past 100 loses'
+                : game.config.gameMode === 'teenpatti' ? tpLobbySummary(game.config)
+                : 'Classic'}
             </div>
           </Panel>
           <Panel style={{ padding: theme.spacing['2xl'] }}>
@@ -1895,7 +2277,7 @@ export function App() {
       )}
 
       {/* Classic table */}
-      {view === 'table' && game && !isGolf && !isCabo && (
+      {view === 'table' && game && !isGolf && !isCabo && !isTp && (
         <div className="view-enter" style={{ display: 'grid', gap: 16, position: 'relative', zIndex: 1, maxWidth: 900, margin: '0 auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
             <span style={{ fontFamily: theme.typography.fontFamilyDisplay, fontWeight: theme.typography.fontWeight.semibold, fontSize: theme.typography.fontSize.xl, color: theme.colors.dark[50] }}>Classic</span>
@@ -1944,6 +2326,19 @@ export function App() {
             pendingDraw={caboPendingDraw} setPendingDraw={setCaboPendingDraw}
             snapGap={caboSnapGap} setSnapGap={setCaboSnapGap} />
         </div>
+      )}
+
+      {/* Teen Patti table */}
+      {view === 'table' && game && isTp && game.tp && (
+        <div className="view-enter" style={{ position: 'relative', zIndex: 1, maxWidth: 1000, margin: '0 auto' }}>
+          <TeenPattiTable key={`${game.gameId}:${game.matchNumber}`} game={game} playerId={playerId} priv={privateState} socket={socket} />
+        </div>
+      )}
+
+      {/* Teen Patti hand result / end of game */}
+      {game && isTp && game.tp && (phase === 'between-rounds' || phase === 'rematch-pending') && (
+        <TpResultModal onRules={() => setShowRules(true)} game={game} playerId={playerId} priv={privateState} phase={phase} socket={socket}
+          onAckNextRound={ackNextRound} onAckRematch={ackRematch} onLeave={() => setConfirmLeave(true)} />
       )}
 
       {/* Golf between-rounds / rematch modal */}
@@ -1996,7 +2391,7 @@ export function App() {
         <p style={{ lineHeight: 1.7 }}>{game?.status === 'active' ? 'You will forfeit this match and cannot rejoin it. If only one player remains, the room returns to the lobby.' : 'You can join another room or create a new game.'}</p>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}><Btn variant="outline" onClick={() => setConfirmLeave(false)}>Stay in room</Btn><Btn variant="error" onClick={leaveGame}>Leave room</Btn></div>
       </Modal>}
-      {showRules && <RulesGuide initialMode={isCabo || gameMode === 'cabo' ? 'cabo' : 'golf'} onClose={() => setShowRules(false)} />}
+      {showRules && <RulesGuide initialMode={game ? (isTp ? 'teenpatti' : isCabo ? 'cabo' : 'golf') : gameMode === 'classic' ? 'golf' : gameMode} onClose={() => setShowRules(false)} />}
     </div>
   );
 }

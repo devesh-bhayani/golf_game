@@ -27,6 +27,8 @@
     "src/test-validation.ts",
     "src/test-cabo-specials.ts",
     "src/test-release.ts",
-    "src/test-bots.ts"
+    "src/test-bots.ts",
+    "src/test-tp-rank.ts",
+    "src/test-teenpatti.ts"
   ]
 }

@@ -16,7 +16,9 @@ export type Card = {
   value: number;
 };
 
-export type GameMode = 'classic' | 'golf' | 'cabo';
+export type GameMode = 'classic' | 'golf' | 'cabo' | 'teenpatti';
+
+export type TpStakeLevel = 'low' | 'medium' | 'high';
 
 export type GamePhase =
   | 'waiting'
@@ -33,6 +35,66 @@ export type GameConfig = {
   numberOfDecks: number;     // client value ignored; recomputed by decksNeeded()
   cardsPerPlayer: number;
   gameMode?: GameMode;
+  // Teen Patti room options (ignored by other modes)
+  tpStakes?: TpStakeLevel;
+  tpHands?: number;       // hands per match; 0 = unlimited
+  tpSideShow?: boolean;
+  tpBlindLimit?: number;  // 0 = off, else must see after this many blind bets
+};
+
+// ---------- Teen Patti ----------
+
+export type TpSeat = {
+  playerId: string;
+  coins: number;
+  net: number;          // coins - starting stack - refills
+  refills: number;
+  inHand: boolean;      // dealt into the current hand
+  seen: boolean;
+  packed: boolean;
+  bet: number;          // coins put into the current pot
+};
+
+// A hand that was revealed to the table (show / pot-limit show). Public.
+export type TpShownHand = { playerId: string; cards: Card[]; hand: string };
+
+export type TpResult = {
+  handNumber: number;
+  how: 'packed' | 'show' | 'pot-limit';
+  winners: string[];
+  pot: number;
+  shown: TpShownHand[];
+  deltas: Record<string, number>; // coin change this hand, per seat
+};
+
+export type TpSnapshot = {
+  handNumber: number;
+  targetHands: number;
+  boot: number;
+  potLimit: number;
+  start: number;
+  pot: number;
+  stake: number;
+  dealerId: string | null;
+  turn: string | null;
+  sideShowEnabled: boolean;
+  blindLimit: number;
+  seats: TpSeat[];
+  sideShow: { from: string; to: string } | null;
+  result: TpResult | null;
+  leaderboard?: Array<{ playerId: string; displayName: string; net: number; coins: number; rank: number }>;
+};
+
+// Legal moves for this player right now, computed by the server.
+export type TpOptions = {
+  myTurn: boolean;
+  canSee: boolean;
+  mustSee: boolean;
+  canPack: boolean;
+  bets: Array<{ double: boolean; amount: number; label: string }>;
+  show: { cost: number } | null;
+  sideShow: { cost: number; target: string } | null;
+  canRefill: boolean;
 };
 
 // Golf slot as seen in the public snapshot: card is null until revealed+locked.
@@ -96,6 +158,7 @@ export type GameSnapshot = {
   caboRoundScores?: { playerId: string; scores: number[] }[];
   caboCumulativeScores?: Record<string, number>;
   caboLeaderboard?: Array<{ rank: number; displayName: string; score: number; playerId: string }>;
+  tp?: TpSnapshot;
 };
 
 export type PrivateGameState = {
@@ -108,4 +171,8 @@ export type PrivateGameState = {
   snapGap: { opponentId: string } | null;
   scoreDetails: Array<{ label: string; points: number }>;
   caboHandTotal?: number | null; // own raw Cabo hand value, results phases only
+  tpCards?: Card[] | null;          // own Teen Patti cards: only once seen (or after the hand)
+  tpOptions?: TpOptions | null;
+  tpKnown?: TpShownHand[];          // hands you saw in an accepted side show this hand
+  tpSideShowAsk?: { from: string } | null; // someone asked you for a side show
 };

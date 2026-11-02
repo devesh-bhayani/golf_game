@@ -7,7 +7,10 @@ import { customAlphabet } from 'nanoid';
 
 // Wire types live in shared-types.ts (single source of truth with the client).
 // Type-only import: erased at compile time, so dist/ has no runtime dependency.
-import type { Suit, Rank, Card, GameMode, GamePhase, GameConfig, GameSnapshot, PrivateGameState, LastAction } from './shared-types';
+import type { Suit, Rank, Card, GameMode, GamePhase, GameConfig, GameSnapshot, PrivateGameState, LastAction, TpOptions, TpResult, TpShownHand, TpSnapshot } from './shared-types';
+// Runtime import of a local module: the explicit .js extension is required by
+// Node's ESM loader in production (dist/), and resolves to the .ts in dev/tests.
+import { compareTp, tpBetAmount, tpNextStake, tpShowCost, tpStakeInfo, tpHandName, tpStrength } from './teenpatti.js';
 
 type Player = {
   playerId: string;
@@ -78,6 +81,26 @@ type GameState = {
   // public move log (latest only)
   lastAction?: LastAction;
   actionSeq?: number;
+  // teen patti (play coins; see the Teen Patti section)
+  tpCoins?: Map<string, number>;
+  tpRefills?: Map<string, number>;
+  tpGranted?: Map<string, number>;    // coins handed out to the seat: starting stack + refill top-ups
+  tpStartCoins?: Map<string, number>; // coins when the hand began (for per-hand deltas)
+  tpCards?: Map<string, Card[]>;
+  tpInHand?: string[];                // dealt players in seat order; departed players stay as packed
+  tpSeen?: Set<string>;
+  tpPacked?: Set<string>;
+  tpBets?: Map<string, number>;       // coins put in this hand
+  tpBlindTurns?: Map<string, number>;
+  tpPot?: number;
+  tpStake?: number;
+  tpDealerId?: string | null;
+  tpTurn?: string | null;
+  tpSideShow?: { from: string; to: string } | null;
+  tpKnown?: Map<string, TpShownHand[]>; // hands each player saw in an accepted side show
+  tpResult?: TpResult | null;
+  tpHandNumber?: number;
+  tpLeaderboard?: TpSnapshot['leaderboard'];
 };
 
 const nano4 = customAlphabet('0123456789', 4);
@@ -134,7 +157,7 @@ function reapStaleGames(now: number = Date.now()): number {
 // game config is rebuilt from a whitelist so a hostile payload can't, e.g.,
 // drive a huge cardsPerPlayer into the deck allocator.
 const MAX_NAME_LEN = 24;
-const VALID_MODES: GameMode[] = ['classic', 'golf', 'cabo'];
+const VALID_MODES: GameMode[] = ['classic', 'golf', 'cabo', 'teenpatti'];
 
 function sanitizeName(raw: unknown, fallback: string): string {
   if (typeof raw !== 'string') return fallback;
@@ -158,18 +181,27 @@ function sanitizeConfig(raw: any): GameConfig {
   let cardsPerPlayer: number;
   if (gameMode === 'cabo') {
     cardsPerPlayer = 4; // fixed by the rules
+  } else if (gameMode === 'teenpatti') {
+    cardsPerPlayer = 3; // fixed by the rules
   } else if (gameMode === 'golf') {
     cardsPerPlayer = [4, 6, 8].includes(raw?.cardsPerPlayer) ? raw.cardsPerPlayer : 4;
   } else {
     cardsPerPlayer = clampInt(raw?.cardsPerPlayer, 1, 13, 5);
   }
-  return {
+  const config: GameConfig = {
     maxPlayers: clampInt(raw?.maxPlayers, 2, 8, 8),
     totalCardsPerDeck: 52,
     numberOfDecks: 1, // recomputed from table size at deal time
     cardsPerPlayer,
     gameMode,
   };
+  if (gameMode === 'teenpatti') {
+    config.tpStakes = ['low', 'medium', 'high'].includes(raw?.tpStakes) ? raw.tpStakes : 'medium';
+    config.tpHands = [0, 10, 20].includes(raw?.tpHands) ? raw.tpHands : 10;
+    config.tpSideShow = raw?.tpSideShow !== false;
+    config.tpBlindLimit = [0, 3, 4].includes(raw?.tpBlindLimit) ? raw.tpBlindLimit : 0;
+  }
+  return config;
 }
 
 // ---------- rate limiting ----------
@@ -600,6 +632,321 @@ function resetCaboForRematch(state: GameState): void {
   dealCaboRound(state);
 }
 
+// ---------- Teen Patti ----------
+// Betting game with play coins. Pure rules (ranking, bet sizes, stakes) live
+// in teenpatti.ts; this section owns the hand lifecycle on GameState.
+// Invariant: sum of tpCoins + tpPot = coins issued (start stacks + refills),
+// minus whatever departed players took with them.
+
+function tpInfo(state: GameState) {
+  return tpStakeInfo(state.config.tpStakes ?? 'medium');
+}
+
+function tpSeats(state: GameState): string[] {
+  return Array.from(state.players.keys());
+}
+
+// Players still in the current hand, in seat order.
+function tpActive(state: GameState): string[] {
+  return (state.tpInHand ?? []).filter((pid) => !state.tpPacked?.has(pid));
+}
+
+// Next / previous player still in the hand, going around the dealt order.
+function tpNextActive(state: GameState, fromPid: string): string | null {
+  const order = state.tpInHand ?? [];
+  const i = order.indexOf(fromPid);
+  for (let k = 1; k <= order.length; k++) {
+    const pid = order[(i + k + order.length) % order.length];
+    if (!state.tpPacked?.has(pid)) return pid;
+  }
+  return null;
+}
+
+function tpPrevActive(state: GameState, fromPid: string): string | null {
+  const order = state.tpInHand ?? [];
+  const i = order.indexOf(fromPid);
+  for (let k = 1; k < order.length; k++) {
+    const pid = order[(i - k + order.length) % order.length];
+    if (!state.tpPacked?.has(pid)) return pid;
+  }
+  return null;
+}
+
+function tpCoinsOf(state: GameState, pid: string): number {
+  return state.tpCoins?.get(pid) ?? 0;
+}
+
+// Winnings so far: coins held minus every coin the room handed this seat.
+function tpNet(state: GameState, pid: string): number {
+  return tpCoinsOf(state, pid) - (state.tpGranted?.get(pid) ?? tpInfo(state).start);
+}
+
+function tpPay(state: GameState, pid: string, amount: number): void {
+  state.tpCoins!.set(pid, tpCoinsOf(state, pid) - amount);
+  state.tpBets!.set(pid, (state.tpBets!.get(pid) ?? 0) + amount);
+  state.tpPot = (state.tpPot ?? 0) + amount;
+}
+
+function tpClear(state: GameState): void {
+  state.tpCoins = undefined; state.tpRefills = undefined; state.tpGranted = undefined; state.tpStartCoins = undefined;
+  state.tpCards = undefined; state.tpInHand = undefined; state.tpSeen = undefined; state.tpPacked = undefined;
+  state.tpBets = undefined; state.tpBlindTurns = undefined; state.tpPot = undefined; state.tpStake = undefined;
+  state.tpDealerId = undefined; state.tpTurn = undefined; state.tpSideShow = undefined; state.tpKnown = undefined;
+  state.tpResult = undefined; state.tpHandNumber = undefined; state.tpLeaderboard = undefined;
+}
+
+function startTeenPatti(state: GameState): void {
+  const { start } = tpInfo(state);
+  state.status = 'active';
+  state.matchNumber = (state.matchNumber ?? 0) + 1;
+  state.notice = undefined;
+  state.tpCoins = new Map(tpSeats(state).map((pid) => [pid, start]));
+  state.tpRefills = new Map(tpSeats(state).map((pid) => [pid, 0]));
+  state.tpGranted = new Map(tpSeats(state).map((pid) => [pid, start]));
+  state.tpHandNumber = 0;
+  state.tpDealerId = null;
+  state.tpLeaderboard = undefined;
+  state.targetRounds = state.config.tpHands ?? 0;
+  state.betweenRoundAckByPlayer = new Set();
+  state.rematchAckByPlayer = new Set();
+  tpDealHand(state);
+}
+
+// Deals the next hand to every connected seat with at least the pot limit in
+// coins (so nobody can run short mid-hand). Returns false if fewer than two
+// players can be dealt in.
+function tpDealHand(state: GameState): boolean {
+  const { boot, potLimit } = tpInfo(state);
+  const seats = tpSeats(state);
+  const dealt = seats.filter((pid) => state.players.get(pid)?.connected && tpCoinsOf(state, pid) >= potLimit);
+  if (dealt.length < 2) return false;
+
+  // The dealer moves one seat clockwise (skipping anyone not dealt in).
+  const prev = state.tpDealerId ? seats.indexOf(state.tpDealerId) : -1;
+  let dealer = dealt[0];
+  for (let k = 1; k <= seats.length; k++) {
+    const pid = seats[(prev + k + seats.length) % seats.length];
+    if (dealt.includes(pid)) { dealer = pid; break; }
+  }
+  state.tpDealerId = dealer;
+  state.tpHandNumber = (state.tpHandNumber ?? 0) + 1;
+  state.currentRound = state.tpHandNumber;
+
+  state.config.numberOfDecks = decksNeeded(dealt.length, 3);
+  const deck = dealDeck(state);
+  state.tpCards = new Map();
+  let next = 0;
+  for (const pid of dealt) { state.tpCards.set(pid, deck.slice(next, next + 3)); next += 3; }
+  state.extraDeck = deck.slice(next);
+
+  state.tpInHand = dealt;
+  state.tpSeen = new Set();
+  state.tpPacked = new Set();
+  state.tpBlindTurns = new Map();
+  state.tpStartCoins = new Map(seats.map((pid) => [pid, tpCoinsOf(state, pid)]));
+  state.tpBets = new Map();
+  state.tpPot = 0;
+  for (const pid of dealt) tpPay(state, pid, boot);
+  state.tpStake = boot;
+  state.tpSideShow = null;
+  state.tpKnown = new Map();
+  state.tpResult = null;
+  state.tpTurn = tpNextActive(state, dealer);
+  state.phase = 'play';
+  state.status = 'active';
+  state.notice = undefined;
+  state.lastAction = undefined;
+  return true;
+}
+
+// Everything this player may do right now, with exact costs. The client only
+// renders these; it never works out a Teen Patti rule itself.
+function tpOptionsFor(state: GameState, pid: string): TpOptions | null {
+  if (state.config.gameMode !== 'teenpatti' || !state.tpCoins) return null;
+  const { potLimit } = tpInfo(state);
+  const playing = state.phase === 'play';
+  const inHand = playing && !!state.tpInHand?.includes(pid) && !state.tpPacked?.has(pid);
+  const options: TpOptions = {
+    myTurn: false, canSee: false, mustSee: false, canPack: false, bets: [], show: null, sideShow: null,
+    canRefill: tpCoinsOf(state, pid) < potLimit && !inHand && state.phase !== 'rematch-pending',
+  };
+  if (!inHand) return options;
+  const seen = state.tpSeen!.has(pid);
+  options.canSee = !seen;
+  if (state.tpTurn !== pid || state.tpSideShow) return options;
+
+  const stake = state.tpStake!;
+  const room = potLimit - state.tpPot!; // a bet that reaches the pot limit is trimmed, then everyone shows
+  const blindLimit = state.config.tpBlindLimit ?? 0;
+  options.myTurn = true;
+  options.canPack = true;
+  options.mustSee = !seen && blindLimit > 0 && (state.tpBlindTurns!.get(pid) ?? 0) >= blindLimit;
+  if (!options.mustSee) {
+    const min = Math.min(tpBetAmount(seen, stake, false), room);
+    const max = Math.min(tpBetAmount(seen, stake, true), room);
+    options.bets.push({ double: false, amount: min, label: seen ? 'Chaal' : 'Blind' });
+    if (max > min) options.bets.push({ double: true, amount: max, label: seen ? 'Raise' : 'Blind ×2' });
+  }
+  const active = tpActive(state);
+  if (active.length === 2) {
+    const other = active.find((p) => p !== pid)!;
+    // A seen player may not force a show against a blind one.
+    if (!seen || state.tpSeen!.has(other)) options.show = { cost: Math.min(tpShowCost(seen, stake), room) };
+  }
+  if (state.config.tpSideShow !== false && active.length >= 3 && seen && !options.mustSee) {
+    const target = tpPrevActive(state, pid);
+    const cost = tpBetAmount(true, stake, false);
+    if (target && state.tpSeen!.has(target) && cost < room) options.sideShow = { cost, target };
+  }
+  return options;
+}
+
+function tpShown(state: GameState, pid: string): TpShownHand {
+  const cards = state.tpCards!.get(pid)!;
+  return { playerId: pid, cards, hand: tpHandName(cards) };
+}
+
+function tpFinishHand(state: GameState, how: TpResult['how'], show?: { winner: string; shown: string[] }): void {
+  const active = tpActive(state);
+  let winners: string[];
+  let shownIds: string[] = [];
+  if (how === 'show' && show) {
+    winners = [show.winner];
+    shownIds = show.shown;
+  } else if (how === 'pot-limit') {
+    // Everyone still in shows; the best hand wins, exact ties split the pot.
+    shownIds = active;
+    winners = [active[0]];
+    for (const pid of active.slice(1)) {
+      const c = compareTp(state.tpCards!.get(pid)!, state.tpCards!.get(winners[0])!);
+      if (c > 0) winners = [pid]; else if (c === 0) winners.push(pid);
+    }
+  } else {
+    winners = active.slice(0, 1);
+  }
+
+  // Equal shares; odd coins go to the first winners after the dealer.
+  const order = state.tpInHand!;
+  const after = order.indexOf(state.tpDealerId ?? '');
+  winners.sort((a, b) => ((order.indexOf(a) - after + order.length) % order.length) - ((order.indexOf(b) - after + order.length) % order.length));
+  const pot = state.tpPot!;
+  const share = Math.floor(pot / winners.length);
+  let odd = pot - share * winners.length;
+  for (const w of winners) {
+    state.tpCoins!.set(w, tpCoinsOf(state, w) + share + (odd > 0 ? 1 : 0));
+    if (odd > 0) odd--;
+  }
+
+  const deltas: Record<string, number> = {};
+  for (const pid of tpSeats(state)) deltas[pid] = tpCoinsOf(state, pid) - (state.tpStartCoins?.get(pid) ?? tpCoinsOf(state, pid));
+  state.tpResult = { handNumber: state.tpHandNumber ?? 0, how, winners, pot, shown: shownIds.map((pid) => tpShown(state, pid)), deltas };
+  state.tpPot = 0;
+  state.tpTurn = null;
+  state.tpSideShow = null;
+  const names = winners.map((w) => nameOf(state, w)).join(' and ');
+  const why = how === 'packed' ? 'everyone else packed' : how === 'show' ? `won the show with ${tpShown(state, winners[0]).hand.toLowerCase()}` : 'the pot limit was reached and every hand was shown';
+  logAction(state, winners[0], 'tp:win', winners.length > 1 ? `and ${names.split(' and ').slice(1).join(' and ')} split ${pot} coins: ${why}` : `won ${pot} coins: ${why}`);
+
+  const target = state.config.tpHands ?? 0;
+  if (target > 0 && (state.tpHandNumber ?? 0) >= target) {
+    tpFinalizeMatch(state);
+  } else {
+    state.phase = 'between-rounds';
+    state.betweenRoundAckByPlayer = new Set();
+    autoAckDisconnected(state, state.betweenRoundAckByPlayer);
+  }
+}
+
+function tpFinalizeMatch(state: GameState): void {
+  state.status = 'ended';
+  state.phase = 'rematch-pending';
+  const rows = tpSeats(state)
+    .map((pid) => ({ playerId: pid, displayName: nameOf(state, pid), net: tpNet(state, pid), coins: tpCoinsOf(state, pid) }))
+    .sort((a, b) => b.net - a.net);
+  state.tpLeaderboard = rows.map((r, i) => ({ ...r, rank: rows.findIndex((x) => x.net === r.net) + 1 || i + 1 }));
+  state.rematchAckByPlayer = new Set();
+  autoAckDisconnected(state, state.rematchAckByPlayer);
+}
+
+// Between hands: deal the next one once every connected player is ready and
+// at least two can be dealt in.
+function maybeTpAdvance(state: GameState): void {
+  if (state.phase !== 'between-rounds' || !state.tpCoins) return;
+  const required = Array.from(state.players.values()).filter((p) => p.connected).map((p) => p.playerId);
+  if (required.length < 2 || !required.every((pid) => state.betweenRoundAckByPlayer.has(pid))) return;
+  if (!tpDealHand(state)) {
+    state.notice = `Waiting for a refill: you need at least ${tpInfo(state).potLimit} coins to be dealt in.`;
+  }
+}
+
+function tpResolveSideShow(state: GameState, accept: boolean): void {
+  const { from, to } = state.tpSideShow!;
+  state.tpSideShow = null;
+  if (!accept) {
+    logAction(state, to, 'tp:side-show-decline', `declined ${nameOf(state, from)}'s side show`);
+    state.tpTurn = tpNextActive(state, from);
+    return;
+  }
+  // Compared privately: only these two see each other's cards. Tie: the asker packs.
+  const loser = compareTp(state.tpCards!.get(from)!, state.tpCards!.get(to)!) > 0 ? to : from;
+  state.tpPacked!.add(loser);
+  for (const [viewer, other] of [[from, to], [to, from]]) {
+    state.tpKnown!.set(viewer, [...(state.tpKnown!.get(viewer) ?? []), tpShown(state, other)]);
+  }
+  logAction(state, to, 'tp:side-show-accept', `accepted ${nameOf(state, from)}'s side show, and ${nameOf(state, loser)} packed`);
+  if (tpActive(state).length === 1) tpFinishHand(state, 'packed');
+  else state.tpTurn = tpNextActive(state, from);
+}
+
+// A player leaving mid-hand forfeits what they bet; the hand carries on.
+function tpOnLeave(state: GameState, pid: string): void {
+  if (state.phase === 'play' && state.tpInHand?.includes(pid)) {
+    const wasIn = !state.tpPacked!.has(pid);
+    state.tpPacked!.add(pid);
+    const pending = state.tpSideShow;
+    if (pending && (pending.from === pid || pending.to === pid)) {
+      state.tpSideShow = null;
+      state.tpTurn = tpNextActive(state, pending.from);
+    } else if (state.tpTurn === pid) {
+      state.tpTurn = tpNextActive(state, pid);
+    }
+    if (wasIn && tpActive(state).length === 1) tpFinishHand(state, 'packed');
+  }
+  state.tpCoins?.delete(pid);
+  state.tpRefills?.delete(pid);
+  state.tpGranted?.delete(pid);
+  state.tpStartCoins?.delete(pid);
+}
+
+function tpPublic(state: GameState): TpSnapshot {
+  const { boot, potLimit, start } = tpInfo(state);
+  const playing = state.phase === 'play';
+  return {
+    handNumber: state.tpHandNumber ?? 0,
+    targetHands: state.config.tpHands ?? 0,
+    boot, potLimit, start,
+    pot: state.tpPot ?? 0,
+    stake: state.tpStake ?? boot,
+    dealerId: state.tpDealerId ?? null,
+    turn: playing ? state.tpTurn ?? null : null,
+    sideShowEnabled: state.config.tpSideShow !== false,
+    blindLimit: state.config.tpBlindLimit ?? 0,
+    seats: tpSeats(state).map((pid) => ({
+      playerId: pid,
+      coins: tpCoinsOf(state, pid),
+      net: tpNet(state, pid),
+      refills: state.tpRefills?.get(pid) ?? 0,
+      inHand: !!state.tpInHand?.includes(pid),
+      seen: !!state.tpSeen?.has(pid),
+      packed: !!state.tpPacked?.has(pid),
+      bet: state.tpBets?.get(pid) ?? 0,
+    })),
+    sideShow: state.tpSideShow ?? null,
+    result: state.tpResult ?? null, // only hands that were shown to the table
+    leaderboard: state.tpLeaderboard,
+  };
+}
+
 // ---------- shared helpers ----------
 
 function privatePlayerState(state: GameState, playerId: string) {
@@ -624,6 +971,12 @@ function privatePlayerState(state: GameState, playerId: string) {
     scoreDetails: results && state.golfHands?.has(playerId) ? golfScoreDetails(state.golfHands.get(playerId)!) : [],
     // Raw Cabo hand value at round end (before the lowest-hand 0 / caller +5 adjustments).
     caboHandTotal: results && state.caboHands?.has(playerId) ? calculateCaboHandScore(state.caboHands.get(playerId)!) : null,
+    // Teen Patti: a blind player's own cards are NOT sent until they press See,
+    // so nobody can peek through the browser and still bet blind.
+    tpCards: state.tpInHand?.includes(playerId) && (state.tpSeen?.has(playerId) || results) ? state.tpCards?.get(playerId) ?? null : null,
+    tpOptions: tpOptionsFor(state, playerId),
+    tpKnown: state.tpKnown?.get(playerId) ?? [],
+    tpSideShowAsk: state.tpSideShow?.to === playerId ? { from: state.tpSideShow.from } : null,
   };
 }
 
@@ -686,9 +1039,11 @@ function settleReadiness(io: Server, state: GameState) {
     }
   } else if (state.phase === 'between-rounds' && connected.length >= 2) {
     if (state.config.gameMode === 'cabo') maybeCaboAdvanceRound(io, state);
+    else if (state.config.gameMode === 'teenpatti') maybeTpAdvance(state);
     else maybeAdvanceRound(io, state);
   } else if (state.phase === 'rematch-pending' && connected.length >= 2 && connected.every(p => state.rematchAckByPlayer.has(p.playerId))) {
     if (state.config.gameMode === 'cabo') resetCaboForRematch(state);
+    else if (state.config.gameMode === 'teenpatti') startTeenPatti(state);
     else resetForRematch(state);
   }
 }
@@ -709,6 +1064,7 @@ function removePlayer(io: Server, state: GameState, playerId: string) {
   state.players.delete(playerId);
   tokenIndex.delete(player.playerToken);
   if (player.isBot) disposeBot(player.currentSocketId);
+  if (state.tpCoins) tpOnLeave(state, playerId);
   state.golfHands?.delete(playerId); state.caboHands?.delete(playerId); state.hands.delete(playerId);
   state.pendingDrawByPlayer.delete(playerId); state.caboPendingDraw?.delete(playerId);
   state.roundScores.delete(playerId); state.caboRoundScores?.delete(playerId); state.caboCumulativeScores?.delete(playerId);
@@ -732,7 +1088,8 @@ function removePlayer(io: Server, state: GameState, playerId: string) {
     state.golfHands = undefined; state.caboHands = undefined; state.extraDeck = []; state.discardPile = [];
     state.roundScores.clear(); state.caboRoundScores?.clear(); state.caboCumulativeScores?.clear();
     state.pendingDrawByPlayer.clear(); state.caboPendingDraw?.clear(); state.caboBlackKingPending?.clear(); state.caboSnapGapPending?.clear();
-    state.notice = 'The match ended because fewer than two players remain. Invite a friend to start a new match.';
+    tpClear(state);
+    state.notice = 'The match ended because fewer than two players remain. Invite a friend or add a bot to start a new match.';
   } else if (state.phase === 'cabo-called') advanceCaboFinal(io, state);
   else if (state.phase === 'play' && state.config.gameMode === 'golf') checkRoundEnd(io, state);
   settleReadiness(io, state);
@@ -959,6 +1316,8 @@ function publicGameSnapshot(state: GameState, _viewingPlayerId?: string) {
 
   if (state.caboLeaderboard) snapshot.caboLeaderboard = state.caboLeaderboard;
 
+  if (state.tpCoins) snapshot.tp = tpPublic(state);
+
   return snapshot;
 }
 
@@ -999,10 +1358,10 @@ function attachSocketHandlers(socket: Socket) {
     if (['createGame', 'joinGame', 'rejoinGame', 'getLeaderboard', '__test:stackDeck'].includes(event)) { next(); return; }
     const state = getState();
     if (!state || !currentPlayerId) { ack({ error: 'Your session is no longer active. Rejoin the room.' }); return; }
-    if ((event.startsWith('golf:') && state.config.gameMode !== 'golf') || (event.startsWith('cabo:') && state.config.gameMode !== 'cabo') || (['playCard', 'drawCard'].includes(event) && state.config.gameMode !== 'classic')) {
+    if ((event.startsWith('golf:') && state.config.gameMode !== 'golf') || (event.startsWith('cabo:') && state.config.gameMode !== 'cabo') || (event.startsWith('tp:') && state.config.gameMode !== 'teenpatti') || (['playCard', 'drawCard'].includes(event) && state.config.gameMode !== 'classic')) {
       ack({ error: 'Action is not available in this game mode' }); return;
     }
-    const gameplay = /^(golf:(draw|swapWithDiscard|acceptDrawAndSwap|rejectDrawAndReveal)|cabo:(draw|placeDrawn|discardDrawn|useSpecialPower|blackKingDecide|takeDiscard|callCabo|snap|snapSlide|snapSlideDecline)|playCard|drawCard)$/.test(event);
+    const gameplay = /^(golf:(draw|swapWithDiscard|acceptDrawAndSwap|rejectDrawAndReveal)|cabo:(draw|placeDrawn|discardDrawn|useSpecialPower|blackKingDecide|takeDiscard|callCabo|snap|snapSlide|snapSlideDecline)|tp:(see|bet|pack|show|sideShow|sideShowAnswer)|playCard|drawCard)$/.test(event);
     if (gameplay) {
       if (!['play', 'cabo-called'].includes(state.phase)) { ack({ error: 'Cannot act in this phase' }); return; }
       if (Array.from(state.players.values()).filter(p => p.connected).length < 2) { ack({ error: 'Waiting for another player to reconnect' }); return; }
@@ -1206,6 +1565,9 @@ function attachSocketHandlers(socket: Socket) {
       for (const pid of state.players.keys()) {
         emitToPlayer(io, state, pid, 'cabo:hand', state.caboHands!.get(pid) ?? []);
       }
+    } else if (state.config.gameMode === 'teenpatti') {
+      startTeenPatti(state);
+      broadcastSnapshot(io, state);
     } else {
       dealCards(state);
       state.phase = 'play';
@@ -1840,6 +2202,159 @@ function attachSocketHandlers(socket: Socket) {
 
   socket.on('cabo:kickPlayer', kickPlayer);
 
+  // ---- Teen Patti actions ----
+  // The middleware already gates tp: events to this mode and gameplay ones to
+  // the play phase; each handler checks the seat, the turn and the move.
+
+  function tpSeatError(state: GameState, pid: string, needTurn: boolean): string | null {
+    if (!state.tpCoins || state.phase !== 'play') return 'Cannot act in this phase';
+    if (!state.tpInHand?.includes(pid) || state.tpPacked?.has(pid)) return 'You are not in this hand';
+    if (needTurn && state.tpSideShow) return 'Waiting for a side-show answer';
+    if (needTurn && state.tpTurn !== pid) return 'Not your turn';
+    return null;
+  }
+
+  socket.on('tp:see', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    const err = tpSeatError(state, currentPlayerId, false);
+    if (err) return ack({ error: err });
+    if (state.tpSeen!.has(currentPlayerId)) return ack({ error: 'You have already seen your cards' });
+    state.tpSeen!.add(currentPlayerId);
+    logAction(state, currentPlayerId, 'tp:see', 'looked at their cards');
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:bet', (payload: { double?: boolean }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    const err = tpSeatError(state, currentPlayerId, true);
+    if (err) return ack({ error: err });
+    const options = tpOptionsFor(state, currentPlayerId)!;
+    if (options.mustSee) return ack({ error: 'Blind limit reached: look at your cards first', code: 'MUST_SEE' });
+    const bet = options.bets.find((b) => b.double === (payload.double === true));
+    if (!bet) return ack({ error: 'That bet is not available' });
+
+    const seen = state.tpSeen!.has(currentPlayerId);
+    tpPay(state, currentPlayerId, bet.amount);
+    if (!seen) state.tpBlindTurns!.set(currentPlayerId, (state.tpBlindTurns!.get(currentPlayerId) ?? 0) + 1);
+    logAction(state, currentPlayerId, 'tp:bet', seen
+      ? (bet.double ? `raised to ${bet.amount}` : `played chaal for ${bet.amount}`)
+      : (bet.double ? `bet ${bet.amount} blind, doubling the stake` : `bet ${bet.amount} blind`));
+    if (state.tpPot! >= tpInfo(state).potLimit) {
+      tpFinishHand(state, 'pot-limit');
+    } else {
+      state.tpStake = tpNextStake(seen, bet.amount);
+      state.tpTurn = tpNextActive(state, currentPlayerId);
+    }
+    broadcastSnapshot(io, state);
+    ack({ ok: true, amount: bet.amount });
+  });
+
+  socket.on('tp:pack', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    const err = tpSeatError(state, currentPlayerId, true);
+    if (err) return ack({ error: err });
+    state.tpPacked!.add(currentPlayerId);
+    logAction(state, currentPlayerId, 'tp:pack', 'packed');
+    if (tpActive(state).length === 1) tpFinishHand(state, 'packed');
+    else state.tpTurn = tpNextActive(state, currentPlayerId);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:show', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    const err = tpSeatError(state, currentPlayerId, true);
+    if (err) return ack({ error: err });
+    const options = tpOptionsFor(state, currentPlayerId)!;
+    if (!options.show) {
+      return ack({ error: tpActive(state).length !== 2 ? 'A show needs exactly two players left' : 'A seen player cannot ask a blind player for a show' });
+    }
+    const other = tpActive(state).find((p) => p !== currentPlayerId)!;
+    tpPay(state, currentPlayerId, options.show.cost);
+    logAction(state, currentPlayerId, 'tp:show', `paid ${options.show.cost} for a show`);
+    // Higher hand wins; on a tie the player who did NOT pay for the show wins.
+    const cmp = compareTp(state.tpCards!.get(currentPlayerId)!, state.tpCards!.get(other)!);
+    tpFinishHand(state, 'show', { winner: cmp > 0 ? currentPlayerId : other, shown: [currentPlayerId, other] });
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:sideShow', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    const err = tpSeatError(state, currentPlayerId, true);
+    if (err) return ack({ error: err });
+    const options = tpOptionsFor(state, currentPlayerId)!;
+    if (!options.sideShow) return ack({ error: 'A side show is not available right now' });
+    const { cost, target } = options.sideShow;
+    tpPay(state, currentPlayerId, cost); // the minimum chaal; the stake is unchanged
+    state.tpSideShow = { from: currentPlayerId, to: target };
+    logAction(state, currentPlayerId, 'tp:side-show', `played chaal for ${cost} and asked ${nameOf(state, target)} for a side show`);
+    if (!state.players.get(target)?.connected) tpResolveSideShow(state, false);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:sideShowAnswer', (payload: { accept?: boolean }, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.tpSideShow?.to !== currentPlayerId) return ack({ error: 'Nobody asked you for a side show' });
+    tpResolveSideShow(state, payload.accept === true);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:refill', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (!state.tpCoins) return ack({ error: 'Not a Teen Patti game' });
+    const options = tpOptionsFor(state, currentPlayerId)!;
+    const { start, potLimit } = tpInfo(state);
+    if (!options.canRefill) {
+      return ack({ error: tpCoinsOf(state, currentPlayerId) >= potLimit ? `You still have enough coins (${potLimit} needed to be dealt in)` : 'Refill between hands' });
+    }
+    const added = start - tpCoinsOf(state, currentPlayerId);
+    state.tpCoins.set(currentPlayerId, start);
+    state.tpRefills!.set(currentPlayerId, (state.tpRefills!.get(currentPlayerId) ?? 0) + 1);
+    state.tpGranted!.set(currentPlayerId, (state.tpGranted!.get(currentPlayerId) ?? start) + added);
+    // Keep this hand's coin change honest for a seat that refilled mid-hand.
+    if (state.tpStartCoins?.has(currentPlayerId)) state.tpStartCoins.set(currentPlayerId, state.tpStartCoins.get(currentPlayerId)! + added);
+    logAction(state, currentPlayerId, 'tp:refill', `refilled to ${start} play coins`);
+    maybeTpAdvance(state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:ackNextHand', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.phase !== 'between-rounds') return ack({ error: 'Not between hands' });
+    state.betweenRoundAckByPlayer.add(currentPlayerId);
+    autoAckDisconnected(state, state.betweenRoundAckByPlayer);
+    maybeTpAdvance(state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:ackRematch', (_: {}, ack: (res: any) => void) => {
+    const state = getState();
+    if (!state || !currentPlayerId) return ack({ error: 'Not in game' });
+    if (state.phase !== 'rematch-pending') return ack({ error: 'Not in rematch phase' });
+    state.rematchAckByPlayer.add(currentPlayerId);
+    settleReadiness(io, state);
+    broadcastSnapshot(io, state);
+    ack({ ok: true });
+  });
+
+  socket.on('tp:leaveGame', (_: {}, ack: (res: any) => void) => handleLeaveGame(ack));
+
+  socket.on('tp:kickPlayer', kickPlayer);
+
   // ---- Leaderboard ----
   socket.on('getLeaderboard', (_: {}, ack: (res: any) => void) => {
     const sorted = [...globalLeaderboard]
@@ -1891,6 +2406,7 @@ function attachSocketHandlers(socket: Socket) {
     const departedAt = player.disconnectedAt;
     state.peekAckByPlayer?.add(player.playerId); state.caboPeekAckByPlayer?.add(player.playerId);
     state.betweenRoundAckByPlayer.add(player.playerId); state.rematchAckByPlayer.add(player.playerId);
+    if (state.tpSideShow?.to === player.playerId) tpResolveSideShow(state, false);
     if (state.hostId === player.playerId) {
       const next = humanPlayers(state).find(p => p.connected);
       if (next) { state.hostId = next.playerId; state.notice = `${next.displayName} is now the host.`; }
@@ -1972,6 +2488,7 @@ class BotSocket {
   private memoryKey = '';
   private lastSeq = 0;
   private turnsThisRound = 0;
+  private tpBlindBets = 0;
 
   // -- the slice of socket.io's Socket that attachSocketHandlers() uses --
   use(fn: (packet: any[], next: (err?: Error) => void) => void) { this.middleware.push(fn); return this; }
@@ -2012,7 +2529,7 @@ class BotSocket {
     } else if (event === 'game:private') {
       const priv = payload as PrivateGameState;
       const key = `${priv.gameId}:${priv.matchNumber}:${priv.round}`;
-      if (key !== this.memoryKey) { this.memoryKey = key; this.known.clear(); this.turnsThisRound = 0; }
+      if (key !== this.memoryKey) { this.memoryKey = key; this.known.clear(); this.turnsThisRound = 0; this.tpBlindBets = 0; }
       this.priv = priv;
       // Remember any own card the server chose to show us (the opening peek).
       for (const s of priv.golfSlots) if (s.card && !s.locked) this.known.set(s.slotId, s.card);
@@ -2060,22 +2577,61 @@ class BotSocket {
   }
 
   private decide(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {
-    const golf = g.config.gameMode === 'golf';
+    const mode = g.config.gameMode;
+    const golf = mode === 'golf';
+    const tp = mode === 'teenpatti';
+    const prefix = golf ? 'golf' : tp ? 'tp' : 'cabo';
+    // Teen Patti: a bot that can't cover the pot limit refills before anything else.
+    if (tp && priv.tpOptions?.canRefill) return { event: 'tp:refill', payload: {} };
     if (g.phase === 'peek') {
       const acks = golf ? g.golf?.peekAcks : g.cabo?.peekAcks;
-      return acks?.includes(me) ? null : { event: golf ? 'golf:ackPeek' : 'cabo:ackPeek', payload: {} };
+      return acks?.includes(me) ? null : { event: `${prefix}:ackPeek`, payload: {} };
     }
     if (g.phase === 'between-rounds') {
-      return g.betweenRoundAcks?.includes(me) ? null : { event: golf ? 'golf:ackNextRound' : 'cabo:ackNextRound', payload: {} };
+      return g.betweenRoundAcks?.includes(me) ? null : { event: tp ? 'tp:ackNextHand' : `${prefix}:ackNextRound`, payload: {} };
     }
     if (g.phase === 'rematch-pending') {
-      return g.rematchAcks?.includes(me) ? null : { event: golf ? 'golf:ackRematch' : 'cabo:ackRematch', payload: {} };
+      return g.rematchAcks?.includes(me) ? null : { event: `${prefix}:ackRematch`, payload: {} };
     }
     if ((g.phase === 'play' || g.phase === 'cabo-called') && !g.paused) {
+      if (tp) return this.tpMove(g, priv);
       if (golf && g.golf?.turn === me) return this.golfMove(g, priv, me);
       if (!golf && g.cabo?.turn === me) return this.caboMove(g, priv, me);
     }
     return null;
+  }
+
+  // Teen Patti: strength = share of all 22,100 hands this one beats (a pair
+  // already beats ~75%). Pack weak hands as the stake climbs, raise strong
+  // ones, bluff now and then, and play blind for a turn or two while cheap.
+  private tpMove(g: GameSnapshot, priv: PrivateGameState): BotMove | null {
+    const table = g.tp;
+    const options = priv.tpOptions;
+    if (!table || !options) return null;
+    const cards = priv.tpCards;
+    if (priv.tpSideShowAsk) {
+      return { event: 'tp:sideShowAnswer', payload: { accept: !!cards && tpStrength(cards) >= 0.6 } };
+    }
+    if (!options.myTurn) return null;
+    const pressure = Math.log2(Math.max(1, table.stake / table.boot)); // +1 per doubling of the stake
+    const minBet = options.bets.find((b) => !b.double);
+    const raise = options.bets.find((b) => b.double);
+    if (!cards) {
+      const lookNow = options.mustSee || pressure >= 2 || this.tpBlindBets >= 1 + Math.floor(Math.random() * 2);
+      if (lookNow || !minBet) return { event: 'tp:see', payload: {} };
+      if (options.show && pressure >= 1 && Math.random() < 0.25) return { event: 'tp:show', payload: {} };
+      return { event: 'tp:bet', payload: { double: !!raise && Math.random() < 0.15 }, onOk: () => { this.tpBlindBets++; } };
+    }
+    const strength = tpStrength(cards);
+    const left = table.seats.filter((x) => x.inHand && !x.packed).length;
+    const packBelow = Math.min(0.75, 0.3 + 0.08 * pressure + 0.04 * Math.max(0, left - 2));
+    const bluff = Math.random() < 0.08;
+    if (strength < packBelow && !bluff) return { event: 'tp:pack', payload: {} };
+    if (options.show && (strength >= 0.7 || pressure >= 3)) return { event: 'tp:show', payload: {} };
+    if (options.sideShow && strength >= 0.45 && strength < 0.85 && Math.random() < 0.35) return { event: 'tp:sideShow', payload: {} };
+    if (raise && (strength >= 0.9 || bluff)) return { event: 'tp:bet', payload: { double: true } };
+    if (minBet) return { event: 'tp:bet', payload: { double: false } };
+    return { event: 'tp:pack', payload: {} };
   }
 
   private golfMove(g: GameSnapshot, priv: PrivateGameState, me: string): BotMove | null {

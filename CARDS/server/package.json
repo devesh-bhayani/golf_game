@@ -20,7 +20,9 @@
     "test:reaper": "node --loader ts-node/esm src/test-reaper.ts",
     "test:validation": "node --loader ts-node/esm src/test-validation.ts",
     "test:release": "node --loader ts-node/esm src/test-release.ts",
-    "test:bots": "node --loader ts-node/esm src/test-bots.ts"
+    "test:bots": "node --loader ts-node/esm src/test-bots.ts",
+    "test:tp:rank": "node --loader ts-node/esm src/test-tp-rank.ts",
+    "test:tp": "node --loader ts-node/esm src/test-teenpatti.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

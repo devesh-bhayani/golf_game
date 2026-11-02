@@ -40,6 +40,8 @@ jobs:
       - run: npm run e2e:cabo:specials
       - run: npm run test:release
       - run: npm run test:bots
+      - run: npm run test:tp:rank
+      - run: npm run test:tp
       # Catches test files missing from tsconfig "exclude" breaking the prod build
       - run: npx tsc -p tsconfig.json
       - name: Server log on failure
