@@ -1,0 +1,53 @@
+# Temporary: browser playtest + screenshots for review. Lives only on the
+# throwaway `playtest-shots` branch; never merged.
+name: playtest-shots
+
+on:
+  push:
+    branches: [playtest-shots]
+
+permissions:
+  contents: write
+
+jobs:
+  shots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Play and capture
+        working-directory: .playtest
+        run: |
+          set -o pipefail
+          mkdir -p shots
+          {
+            echo '{"name":"playtest","private":true}' > package.json
+            npm install playwright@1.48.2
+            npx playwright install --with-deps chromium
+            node shots.mjs
+          } 2>&1 | tee shots/run.txt
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p .playtest/shots
+          true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shots
+          path: .playtest/shots
+      - name: Publish to playtest-results branch
+        if: always()
+        run: |
+          mkdir -p ../out/CARDS/client
+          cp -r .playtest/shots ../out/CARDS/client/shots
+          echo '{"git":{"deploymentEnabled":false}}' > ../out/CARDS/client/vercel.json
+          echo '{"git":{"deploymentEnabled":false}}' > ../out/vercel.json
+          cd ../out
+          git init -q -b playtest-results
+          git add .
+          git -c user.name=playtest -c user.email=playtest@users.noreply.github.com commit -qm "playtest ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" playtest-results
